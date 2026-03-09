@@ -1,0 +1,187 @@
+import React, { useState } from 'react'
+import StatusBadge from './StatusBadge'
+
+const formatDateTime = (value) => {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  return date.toLocaleString()
+}
+
+const getOngoingMatchCount = (sessionId, ongoingMatches) => {
+  if (!ongoingMatches || !ongoingMatches[sessionId]) return 0
+  const matches = ongoingMatches[sessionId]
+  return Array.isArray(matches) ? matches.length : 0
+}
+
+const SessionTable = ({ sessions, ongoingMatches, isLoading, error, onStartSession, onViewSession, onEditSession, onEndSession, onCreateSession, onNavigateToMatches }) => {
+  const [currentPage, setCurrentPage] = useState(1)
+  const itemsPerPage = 4
+
+  const getStatusColor = (status) => {
+    const colors = {
+      QUEUED: 'text-blue-300',
+      OPEN: 'text-emerald-300',
+      CLOSED: 'text-slate-400',
+    }
+    return colors[status] || 'text-slate-300'
+  }
+
+  const canStart = (session) => session.status === 'QUEUED'
+  const canEnd = (session) => session.status === 'OPEN'
+
+  // Pagination calculations
+  const totalPages = Math.ceil(sessions.length / itemsPerPage)
+  const startIndex = (currentPage - 1) * itemsPerPage
+  const endIndex = startIndex + itemsPerPage
+  const paginatedSessions = sessions.slice(startIndex, endIndex)
+
+  const handleNextPage = () => {
+    if (currentPage < totalPages) {
+      setCurrentPage(currentPage + 1)
+    }
+  }
+
+  const handlePreviousPage = () => {
+    if (currentPage > 1) {
+      setCurrentPage(currentPage - 1)
+    }
+  }
+  return (
+    <section className="rounded-3xl border border-white/10 bg-white/5 p-4 shadow-xl shadow-black/20">
+      <header className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h2 className="text-sm font-semibold text-white sm:text-base">Current sessions</h2>
+          <p className="text-xs text-slate-300">
+            Live queue overview for courts and active sessions.
+          </p>
+        </div>
+        <button
+          onClick={onCreateSession}
+          className="inline-flex items-center justify-center self-start rounded-full bg-emerald-500/20 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-200 transition hover:bg-emerald-500/30 md:self-auto"
+        >
+          + Create Session
+        </button>
+      </header>
+
+      <div className="mt-2 overflow-x-auto rounded-2xl border border-white/10">
+        <table className="min-w-full border-collapse text-left text-xs text-slate-200">
+          <thead className="bg-white/5 text-[9px] uppercase tracking-[0.2em] text-slate-400">
+            <tr>
+              <th className="px-3 py-2">Session</th>
+              <th className="px-3 py-2">Status</th>
+              <th className="px-3 py-2">Courts</th>
+              <th className="px-3 py-2">Players</th>
+              <th className="px-3 py-2">Games</th>
+              <th className="px-3 py-2">Started</th>
+              <th className="px-3 py-2">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/10">
+            {isLoading ? (
+              <tr>
+                <td colSpan="8" className="px-3 py-3 text-center text-xs text-slate-300">
+                  Loading sessions...
+                </td>
+              </tr>
+            ) : error ? (
+              <tr>
+                <td colSpan="8" className="px-3 py-3 text-center text-xs text-rose-200">
+                  <div className="space-y-3">
+                    <p>{error}</p>
+                  </div>
+                </td>
+              </tr>
+            ) : sessions.length === 0 ? (
+              <tr>
+                <td colSpan="8" className="px-3 py-3 text-center text-xs text-slate-300">
+                  No sessions yet. Create one from the control panel.
+                </td>
+              </tr>
+            ) : (
+              paginatedSessions.map((session) => (
+                <tr key={session._id} className="transition hover:bg-white/5">
+                  <td className="px-3 py-2">
+                    <div className="flex flex-col gap-1">
+                      <button
+                        onClick={() => onNavigateToMatches(session)}
+                        className="text-sm font-semibold text-emerald-300 hover:text-emerald-200 hover:underline transition text-left"
+                      >
+                        {session.name}
+                      </button>
+                      
+                    </div>
+                  </td>
+                  <td className="px-3 py-2">
+                    <StatusBadge status={session.status} />
+                  </td>
+                  <td className="px-3 py-2">{session.courts?.length ?? 0}</td>
+                  <td className="px-3 py-2">{session.players?.length ?? 0}</td>
+                  <td className="px-3 py-2">{getOngoingMatchCount(session._id, ongoingMatches)}</td>
+                  <td className="px-3 py-2 text-xs">{formatDateTime(session.startedAt)}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => onViewSession(session)}
+                        className="inline-flex items-center justify-center rounded-full border border-slate-300/40 px-2 py-0.5 text-[11px] font-semibold text-slate-200 transition hover:bg-slate-500/10 hover:border-slate-200/70"
+                      >
+                        View
+                      </button>
+                      <button
+                        onClick={() => onEditSession(session)}
+                        className="inline-flex items-center justify-center rounded-full border border-blue-300/40 px-2 py-0.5 text-[11px] font-semibold text-blue-200 transition hover:bg-blue-500/10 hover:border-blue-200/70"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => onEndSession(session)}
+                        disabled={!canEnd(session)}
+                        className="inline-flex items-center justify-center rounded-full border border-rose-300/40 px-2 py-0.5 text-[11px] font-semibold text-rose-200 transition hover:bg-rose-500/10 hover:border-rose-200/70 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        End Session
+                      </button>
+                      {canStart(session) && (
+                        <button
+                          onClick={() => onStartSession(session._id)}
+                          className="inline-flex items-center justify-center rounded-full border border-emerald-300/40 px-2 py-0.5 text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-500/10 hover:border-emerald-200/70"
+                        >
+                          Start
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {sessions.length > 0 && (
+        <div className="mt-3 flex items-center justify-between">
+          <span className="text-xs text-slate-400">
+            Page {currentPage} of {totalPages}
+          </span>
+          <div className="flex gap-2">
+            <button
+              onClick={handlePreviousPage}
+              disabled={currentPage === 1}
+              className="rounded-full border border-slate-300/40 px-3 py-1 text-xs font-semibold text-slate-200 transition hover:bg-slate-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Previous
+            </button>
+            <button
+              onClick={handleNextPage}
+              disabled={currentPage === totalPages}
+              className="rounded-full border border-slate-300/40 px-3 py-1 text-xs font-semibold text-slate-200 transition hover:bg-slate-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+export default SessionTable
