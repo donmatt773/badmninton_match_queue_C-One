@@ -56,7 +56,7 @@ const GAMES_SUBSCRIPTION = gql`
 `;
 
 const LAST_SESSION_KEY = "lastCreateMatchSessionId";
-const PLAYERS_PER_PAGE = 16;
+const PLAYERS_PER_PAGE = 20;
 
 // Draggable Player Card Component
 const DraggablePlayer = ({ player, isInUse, isAssignedToTeam, hasPlayedWithSelected }) => {
@@ -404,7 +404,11 @@ const CreateMatchForm = ({
     );
   }
 
-  // Sort by skill level
+  // Default sort by name (A-Z)
+  unselectedPlayers = [...unselectedPlayers].sort((a, b) =>
+    (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' })
+  );
+
   // Sort by skill level
   const skillLevelOrder = {
     'BEGINNER': 1,
@@ -415,11 +419,13 @@ const CreateMatchForm = ({
 
   if (sortBySkill === "asc") {
     unselectedPlayers = [...unselectedPlayers].sort((a, b) => 
-      (skillLevelOrder[a.playerLevel] || 0) - (skillLevelOrder[b.playerLevel] || 0)
+      (skillLevelOrder[a.playerLevel] || 0) - (skillLevelOrder[b.playerLevel] || 0) ||
+      (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' })
     );
   } else if (sortBySkill === "desc") {
     unselectedPlayers = [...unselectedPlayers].sort((a, b) => 
-      (skillLevelOrder[b.playerLevel] || 0) - (skillLevelOrder[a.playerLevel] || 0)
+      (skillLevelOrder[b.playerLevel] || 0) - (skillLevelOrder[a.playerLevel] || 0) ||
+      (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' })
     );
   }
 
@@ -694,7 +700,7 @@ const CreateMatchForm = ({
                   </div>
                 </div>
 
-                {/* Player Grid - 4x4 with Pagination */}
+                {/* Player Grid - 4x5 with Pagination */}
                 <div>
                   <div className="mb-2 flex items-center justify-between">
                     <div className="flex items-center gap-3">

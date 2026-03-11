@@ -193,9 +193,9 @@ const OngoingMatchesTable = ({ ongoingMatches, sessions, players, courts, onUpda
                     <button
                       onClick={() => onUpdateMatch && onUpdateMatch(match)}
                       className="rounded-lg bg-blue-500/20 px-3 py-1.5 text-xs font-semibold text-blue-200 transition hover:bg-blue-500/30 hover:text-blue-100"
-                      title="Update match"
+                      title="Edit match"
                     >
-                      Update
+                      Edit
                     </button>
                     <button
                       onClick={() => onEndMatch && onEndMatch(match)}

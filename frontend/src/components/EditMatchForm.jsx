@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react'
 import { DndContext, DragOverlay, useSensor, useSensors, PointerSensor } from "@dnd-kit/core";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 
+const PLAYERS_PER_PAGE = 20;
+
 // Draggable Player Card Component
 const DraggablePlayer = ({ player, isInUse, isAssignedToTeam }) => {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
@@ -74,6 +76,7 @@ const DroppableTeam = ({ teamNumber, children }) => {
 const EditMatchForm = ({ 
   match,
   courts,
+  sessions = [],
   players,
   isOpen, 
   onClose, 
@@ -91,6 +94,7 @@ const EditMatchForm = ({
   const [filterBySkill, setFilterBySkill] = useState('all')
   const [sortBySkill, setSortBySkill] = useState('none')
   const [showAvailableOnly, setShowAvailableOnly] = useState(false)
+  const [currentPlayerPage, setCurrentPlayerPage] = useState(0)
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -120,8 +124,13 @@ const EditMatchForm = ({
       setFilterBySkill('all')
       setSortBySkill('none')
       setShowAvailableOnly(false)
+      setCurrentPlayerPage(0)
     }
   }, [match, isOpen])
+
+  useEffect(() => {
+    setCurrentPlayerPage(0)
+  }, [searchTerm, filterBySkill, sortBySkill, showAvailableOnly])
 
   if (!isOpen) return null
 
@@ -188,11 +197,15 @@ const EditMatchForm = ({
   }
 
   const getPlayerName = (playerId) => {
-    return players?.find(p => p._id === playerId)?.name || 'Unknown'
+    return playersInSession.find(p => p._id === playerId)?.name
+      || players?.find(p => p._id === playerId)?.name
+      || 'Unknown'
   }
 
   const getPlayerLevel = (playerId) => {
-    return players?.find(p => p._id === playerId)?.playerLevel || 'N/A'
+    return playersInSession.find(p => p._id === playerId)?.playerLevel
+      || players?.find(p => p._id === playerId)?.playerLevel
+      || 'N/A'
   }
 
   const getCourtName = (courtId) => {
@@ -205,12 +218,22 @@ const EditMatchForm = ({
   }
 
   const selectedPlayers = [...team1, ...team2]
+
+  const selectedSession = sessions.find((session) => session._id === match?.sessionId)
+  const courtsInSession = selectedSession?.courts
+    ? courts.filter((court) => selectedSession.courts.includes(court._id))
+    : []
+  const playersInSession = selectedSession?.players
+    ? selectedSession.players
+        .map((sessionPlayer) => players?.find((player) => player._id === sessionPlayer.playerId))
+        .filter(Boolean)
+    : []
   
   // Get players in ongoing matches and queue
   const allMatches = Object.values(ongoingMatches).flat().concat(Object.values(matchQueue).flat())
   const playersInUseSet = new Set(allMatches.flatMap((match) => match.playerIds || []))
   
-  let unselectedPlayers = players?.filter(p => !selectedPlayers.includes(p._id)) || []
+  let unselectedPlayers = playersInSession.filter((p) => !selectedPlayers.includes(p._id))
 
   // Filter by search term
   if (searchTerm.trim()) {
@@ -235,18 +258,34 @@ const EditMatchForm = ({
 
   // Sort by skill level
   const skillOrder = { BEGINNER: 0, INTERMEDIATE: 1, UPPERINTERMEDIATE: 2, ADVANCED: 3 }
+
+  // Default sort by name (A-Z)
+  unselectedPlayers = [...unselectedPlayers].sort((a, b) =>
+    (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' })
+  )
+
   if (sortBySkill === 'asc') {
     unselectedPlayers = [...unselectedPlayers].sort((a, b) => 
-      (skillOrder[a.playerLevel] || 0) - (skillOrder[b.playerLevel] || 0)
+      (skillOrder[a.playerLevel] || 0) - (skillOrder[b.playerLevel] || 0) ||
+      (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' })
     )
   } else if (sortBySkill === 'desc') {
     unselectedPlayers = [...unselectedPlayers].sort((a, b) => 
-      (skillOrder[b.playerLevel] || 0) - (skillOrder[a.playerLevel] || 0)
+      (skillOrder[b.playerLevel] || 0) - (skillOrder[a.playerLevel] || 0) ||
+      (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' })
     )
   }
 
+  const totalPlayerPages = Math.max(1, Math.ceil(unselectedPlayers.length / PLAYERS_PER_PAGE))
+  const clampedPlayerPage = Math.min(currentPlayerPage, totalPlayerPages - 1)
+  const startPlayerIndex = Math.max(0, clampedPlayerPage) * PLAYERS_PER_PAGE
+  const endPlayerIndex = startPlayerIndex + PLAYERS_PER_PAGE
+  const pagedPlayers = unselectedPlayers.slice(startPlayerIndex, endPlayerIndex)
+
   // Get the active dragged player
-  const activeDragPlayer = activeDragId ? players?.find(p => p._id === activeDragId) : null;
+  const activeDragPlayer = activeDragId
+    ? playersInSession.find((p) => p._id === activeDragId) || players?.find((p) => p._id === activeDragId)
+    : null;
 
   return (
     <DndContext
@@ -343,7 +382,7 @@ const EditMatchForm = ({
                     className="w-full rounded border border-white/10 bg-slate-800 px-2 py-1 text-xs text-white focus:border-white/30 focus:outline-none"
                   >
                     <option value="">Choose a court...</option>
-                    {courts?.map((court) => (
+                    {[...courtsInSession].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })).map((court) => (
                       <option key={court._id} value={court._id}>
                         {court.name} ({court.indoor ? "Indoor" : "Outdoor"})
                       </option>
@@ -393,21 +432,96 @@ const EditMatchForm = ({
               {/* Player Grid */}
               <div>
                 <div className="mb-2 flex items-center justify-between">
-                  <label className="text-xs font-semibold text-white">
-                    Drag to Teams
-                  </label>
+                  <div className="flex items-center gap-3">
+                    <label className="text-xs font-semibold text-white">
+                      Drag to Teams
+                    </label>
+                    <div className="flex items-center gap-2 text-[9px] text-slate-400">
+                      <button
+                        type="button"
+                        onClick={() => setFilterBySkill(filterBySkill === 'BEGINNER' ? 'all' : 'BEGINNER')}
+                        className={`flex items-center gap-1 rounded px-1.5 py-0.5 transition ${
+                          filterBySkill === 'BEGINNER'
+                            ? 'border border-blue-500/50 bg-blue-500/30'
+                            : 'hover:bg-blue-500/10'
+                        }`}
+                      >
+                        <div className="h-2 w-2 rounded border border-blue-500/50 bg-blue-500/20"></div>
+                        <span>Beginner</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFilterBySkill(filterBySkill === 'INTERMEDIATE' ? 'all' : 'INTERMEDIATE')}
+                        className={`flex items-center gap-1 rounded px-1.5 py-0.5 transition ${
+                          filterBySkill === 'INTERMEDIATE'
+                            ? 'border border-yellow-500/50 bg-yellow-500/30'
+                            : 'hover:bg-yellow-500/10'
+                        }`}
+                      >
+                        <div className="h-2 w-2 rounded border border-yellow-500/50 bg-yellow-500/20"></div>
+                        <span>Intermediate</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFilterBySkill(filterBySkill === 'UPPERINTERMEDIATE' ? 'all' : 'UPPERINTERMEDIATE')}
+                        className={`flex items-center gap-1 rounded px-1.5 py-0.5 transition ${
+                          filterBySkill === 'UPPERINTERMEDIATE'
+                            ? 'border border-violet-500/50 bg-violet-500/30'
+                            : 'hover:bg-violet-500/10'
+                        }`}
+                      >
+                        <div className="h-2 w-2 rounded border border-violet-500/50 bg-violet-500/20"></div>
+                        <span>Upper Int</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFilterBySkill(filterBySkill === 'ADVANCED' ? 'all' : 'ADVANCED')}
+                        className={`flex items-center gap-1 rounded px-1.5 py-0.5 transition ${
+                          filterBySkill === 'ADVANCED'
+                            ? 'border border-rose-500/50 bg-rose-500/30'
+                            : 'hover:bg-rose-500/10'
+                        }`}
+                      >
+                        <div className="h-2 w-2 rounded border border-rose-500/50 bg-rose-500/20"></div>
+                        <span>Advanced</span>
+                      </button>
+                    </div>
+                  </div>
+                  {totalPlayerPages > 1 && (
+                    <div className="flex items-center gap-2 text-xs text-slate-400">
+                      <button
+                        type="button"
+                        onClick={() => setCurrentPlayerPage(Math.max(0, currentPlayerPage - 1))}
+                        disabled={currentPlayerPage === 0}
+                        className="rounded bg-white/10 px-2 py-1 hover:bg-white/20 disabled:opacity-30 disabled:hover:bg-white/10"
+                      >
+                        Previous
+                      </button>
+                      <span>
+                        Page {currentPlayerPage + 1} / {totalPlayerPages}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setCurrentPlayerPage(Math.min(totalPlayerPages - 1, currentPlayerPage + 1))}
+                        disabled={currentPlayerPage >= totalPlayerPages - 1}
+                        className="rounded bg-white/10 px-2 py-1 hover:bg-white/20 disabled:opacity-30 disabled:hover:bg-white/10"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="mb-3 grid grid-cols-3 gap-1.5 md:grid-cols-5">
-                  {unselectedPlayers.length === 0 ? (
-                    <div className="col-span-4 rounded border border-white/10 bg-white/5 py-3 text-center text-xs text-slate-400">
+                  {pagedPlayers.length === 0 ? (
+                    <div className="col-span-3 rounded border border-white/10 bg-white/5 py-3 text-center text-xs text-slate-400 md:col-span-5">
                       No available players
                     </div>
                   ) : (
-                    unselectedPlayers.map((player) => (
+                    pagedPlayers.map((player) => (
                       <DraggablePlayer
                         key={player._id}
                         player={player}
-                        isInUse={false}
+                        isInUse={playersInUseSet.has(player._id)}
                         isAssignedToTeam={false}
                       />
                     ))

@@ -25,7 +25,7 @@ const playerResolver = {
   },
 
   Query: {
-    players: async () => await Player.find().sort({ createdAt: -1 }),
+    players: async () => await Player.find({ isDeleted: { $ne: true } }).sort({ createdAt: -1 }),
     player: async (_, { id }) => {
 		console.log(id)
       return await Player.findById(id.toString())
@@ -35,7 +35,7 @@ const playerResolver = {
       const safeOffset = Math.max(offset, 0)
 
       // Build filter object
-      const filter = {}
+      const filter = { isDeleted: { $ne: true } }
 
       if (search) {
         filter.name = { $regex: search, $options: 'i' } // Case-insensitive search
@@ -108,7 +108,7 @@ const playerResolver = {
       }
     },
     playersCount: async (_, { search, skillLevel }) => {
-      const filter = {}
+      const filter = { isDeleted: { $ne: true } }
       
       if (search) {
         filter.name = { $regex: search, $options: 'i' }
@@ -120,10 +120,12 @@ const playerResolver = {
       
       return await Player.countDocuments(filter)
     },
+    deletedPlayers: async () => await Player.find({ isDeleted: true }).sort({ deletedAt: -1 }),
     leaderboard: async (_, { limit = 10 }) => {
       const safeLimit = Math.min(Math.max(limit, 1), 100)
 
       return await Player.aggregate([
+        { $match: { isDeleted: { $ne: true } } },
         {
           $addFields: {
             computedWinRate: {
@@ -177,13 +179,35 @@ const playerResolver = {
         return { ok: true, message: "Player created successfully", player }
       } catch (error) {
         console.error(error)
-        throw new GraphQLError("Player Name already exists.", {
+        if (Array.isArray(error?.issues)) {
+          throw new GraphQLError("Validation failed.", {
+            extensions: {
+              code: "VALIDATION_ERROR",
+              fields: error.issues.map((e) => ({
+                path: e.path.join("."),
+                message: e.message,
+              })),
+            },
+          })
+        }
+
+        if (error?.code === 11000) {
+          throw new GraphQLError("An active player with this name already exists.", {
+            extensions: {
+              code: "VALIDATION_ERROR",
+              fields: [
+                {
+                  path: "name",
+                  message: "An active player with this name already exists.",
+                },
+              ],
+            },
+          })
+        }
+
+        throw new GraphQLError(error?.message || "Failed to create player.", {
           extensions: {
-            code: "VALIDATION_ERROR",
-            fields: error.issues.map((e) => ({
-              path: e.path.join("."),
-              message: e.message,
-            })),
+            code: "CREATE_PLAYER_ERROR",
           },
         })
       }
@@ -213,13 +237,24 @@ const playerResolver = {
 
         return { ok: true, message: "Player updated successfully", player }
       } catch (error) {
+        if (error?.code === 11000) {
+          return {
+            ok: false,
+            message: "An active player with this name already exists.",
+            player: null,
+          }
+        }
         return { ok: false, message: error.message, player: null }
       }
     },
 
     deletePlayer: async (_, { id }) => {
       try {
-        const player = await Player.findByIdAndDelete(id)
+        const player = await Player.findByIdAndUpdate(
+          id,
+          { isDeleted: true, deletedAt: new Date() },
+          { returnDocument: 'after' },
+        )
 
         if (!player) {
           return { ok: false, message: "Player not found", player: null }
@@ -229,7 +264,29 @@ const playerResolver = {
           playerUpdates: { type: "DELETED", player },
         })
 
-        return { ok: true, message: "Player deleted successfully", player }
+        return { ok: true, message: "Player archived successfully", player }
+      } catch (error) {
+        return { ok: false, message: error.message, player: null }
+      }
+    },
+
+    restorePlayer: async (_, { id }) => {
+      try {
+        const player = await Player.findByIdAndUpdate(
+          id,
+          { isDeleted: false, deletedAt: null },
+          { returnDocument: 'after' },
+        )
+
+        if (!player) {
+          return { ok: false, message: "Player not found", player: null }
+        }
+
+        pubsub.publish(SUB_TRIGGER, {
+          playerUpdates: { type: "CREATED", player },
+        })
+
+        return { ok: true, message: "Player restored successfully", player }
       } catch (error) {
         return { ok: false, message: error.message, player: null }
       }

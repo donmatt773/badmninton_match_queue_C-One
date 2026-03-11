@@ -55,12 +55,14 @@ const playerTypeDef = gql`
     playersPaginated(limit: Int!, offset: Int!, search: String, skillLevel: String, sortBy: String = "createdAt", sortOrder: String = "desc"): PlayerPaginationResponse!
     playersCount(search: String, skillLevel: String): Int!
     leaderboard(limit: Int = 10): [Player!]!
+    deletedPlayers: [Player!]!
   }
 
   type Mutation {
     createPlayer(input: CreatePlayerInput!): PlayerMutationResponse!
     updatePlayer(id: ID!, input: UpdatePlayerInput!): PlayerMutationResponse!
     deletePlayer(id: ID!): PlayerMutationResponse!
+    restorePlayer(id: ID!): PlayerMutationResponse!
   }
 
   enum PlayerSubType {

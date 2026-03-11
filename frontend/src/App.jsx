@@ -854,7 +854,6 @@ const App = () => {
       })
       
       if (result.data.startMatch.ok) {
-        setIsCreateMatchModalOpen(false)
         await refetchOngoingMatches()
       } else {
         alert(result.data.startMatch.message)
@@ -1030,6 +1029,7 @@ const App = () => {
       <EditMatchForm
         match={selectedMatch}
         courts={courtsData?.courts || []}
+        sessions={sessions}
         players={playersData?.players || []}
         ongoingMatches={ongoingMatches}
         matchQueue={matchQueue}

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react'
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { gql } from '@apollo/client'
 import { useMutation, useSubscription, useQuery } from '@apollo/client/react'
 import MassAddPlayersModal from '../components/MassAddPlayersModal'
@@ -80,6 +80,35 @@ const UPDATE_PLAYER_MUTATION = gql`
   }
 `
 
+const DELETED_PLAYERS_QUERY = gql`
+  query DeletedPlayers {
+    deletedPlayers {
+      _id
+      name
+      gender
+      playerLevel
+      playCount
+      winCount
+      lossCount
+      winRate
+      createdAt
+    }
+  }
+`
+
+const RESTORE_PLAYER_MUTATION = gql`
+  mutation RestorePlayer($id: ID!) {
+    restorePlayer(id: $id) {
+      ok
+      message
+      player {
+        _id
+        name
+      }
+    }
+  }
+`
+
 const PLAYER_UPDATES_SUBSCRIPTION = gql`
   subscription PlayerUpdates {
     playerUpdates {
@@ -105,6 +134,36 @@ const PLAYER_LEVELS = {
   INTERMEDIATE: 'Intermediate',
   UPPERINTERMEDIATE: 'Upper Intermediate',
   ADVANCED: 'Advanced',
+}
+
+const getPlayerErrorMessage = (error) => {
+  const graphQLErrors = [
+    ...(error?.graphQLErrors || []),
+    ...(error?.errors || []),
+    ...(error?.cause?.graphQLErrors || []),
+  ]
+
+  const fieldErrors = graphQLErrors.flatMap((gqlError) => gqlError?.extensions?.fields || [])
+
+  if (fieldErrors.length > 0) {
+    const duplicateNameError = fieldErrors.find(
+      (field) => field?.path === 'name' && /exist/i.test(field?.message || '')
+    )
+
+    if (duplicateNameError) {
+      return 'An active player with this name already exists. Please input a unique name.'
+    }
+
+    return fieldErrors
+      .map((field) => `${field.path}: ${field.message}`)
+      .join('\n')
+  }
+
+  if (/validation failed/i.test(error?.message || '')) {
+    return 'Please review the player details and try again.'
+  }
+
+  return error?.message || 'Failed to save player.'
 }
 
 // Memoized player row component to prevent unnecessary re-renders
@@ -307,6 +366,11 @@ const PlayersPage = ({ onPlayersUpdated, ongoingMatches = {}, matchQueue = {} })
   const headerCheckboxRef = useRef(null)
   const playersPerPage = 10
   const [expandedPlayerId, setExpandedPlayerId] = useState(null)
+  const [showDeletedSection, setShowDeletedSection] = useState(false)
+  const [deletedPlayersState, setDeletedPlayersState] = useState([])
+  const [isRestoreConfirmModalOpen, setIsRestoreConfirmModalOpen] = useState(false)
+  const [playerToRestore, setPlayerToRestore] = useState(null)
+  const [playerNameToRestore, setPlayerNameToRestore] = useState('')
   const [totalPlayersCount, setTotalPlayersCount] = useState(0)
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('')
   const debounceTimerRef = useRef(null)
@@ -347,7 +411,11 @@ const PlayersPage = ({ onPlayersUpdated, ongoingMatches = {}, matchQueue = {} })
       skillLevel: sortBy || null,
     },
   })
-  
+
+  const { data: deletedPlayersData, loading: deletedPlayersLoading } = useQuery(DELETED_PLAYERS_QUERY, {
+    skip: !showDeletedSection,
+  })
+
   const { data: playerUpdateData } = useSubscription(PLAYER_UPDATES_SUBSCRIPTION)
 
   useEffect(() => {
@@ -355,6 +423,12 @@ const PlayersPage = ({ onPlayersUpdated, ongoingMatches = {}, matchQueue = {} })
       setTotalPlayersCount(countData.playersCount)
     }
   }, [countData])
+
+  useEffect(() => {
+    if (deletedPlayersData?.deletedPlayers) {
+      setDeletedPlayersState(deletedPlayersData.deletedPlayers)
+    }
+  }, [deletedPlayersData])
 
   useEffect(() => {
     if (playersData?.playersPaginated?.players) {
@@ -373,6 +447,7 @@ const PlayersPage = ({ onPlayersUpdated, ongoingMatches = {}, matchQueue = {} })
         const exists = prev.some((p) => p._id === player._id)
         return exists ? prev : [...prev, player]
       })
+      setDeletedPlayersState((prev) => prev.filter((p) => p._id !== player._id))
       return
     }
 
@@ -390,7 +465,34 @@ const PlayersPage = ({ onPlayersUpdated, ongoingMatches = {}, matchQueue = {} })
     }
   }, [playerUpdateData])
 
-  const displayedPlayers = playersState
+  const displayedPlayers = useMemo(() => {
+    const sorted = [...playersState]
+    const direction = sortDirection === 'asc' ? 1 : -1
+
+    sorted.sort((a, b) => {
+      if (sortColumn === 'name') {
+        return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) * direction
+      }
+
+      if (sortColumn === 'playCount' || sortColumn === 'winCount' || sortColumn === 'lossCount' || sortColumn === 'winRate') {
+        const aNum = Number(a[sortColumn] ?? 0)
+        const bNum = Number(b[sortColumn] ?? 0)
+        return (aNum - bNum) * direction
+      }
+
+      if (sortColumn === 'createdAt') {
+        const aDate = new Date(a.createdAt || 0).getTime()
+        const bDate = new Date(b.createdAt || 0).getTime()
+        return (aDate - bDate) * direction
+      }
+
+      const aValue = String(a[sortColumn] ?? '')
+      const bValue = String(b[sortColumn] ?? '')
+      return aValue.localeCompare(bValue, undefined, { sensitivity: 'base' }) * direction
+    })
+
+    return sorted
+  }, [playersState, sortColumn, sortDirection])
   const filteredPlayers = displayedPlayers
   const totalPages = Math.ceil(totalPlayersCount / playersPerPage)
   const paginatedPlayers = displayedPlayers
@@ -412,11 +514,6 @@ const PlayersPage = ({ onPlayersUpdated, ongoingMatches = {}, matchQueue = {} })
       }
       setIsSubmitting(false)
     },
-    onError: (error) => {
-      setErrorMessage(error.message)
-      setIsErrorModalOpen(true)
-      setIsSubmitting(false)
-    },
   })
 
   const [deletePlayer] = useMutation(DELETE_PLAYER_MUTATION, {
@@ -428,6 +525,25 @@ const PlayersPage = ({ onPlayersUpdated, ongoingMatches = {}, matchQueue = {} })
         // Success - no modal needed for delete
       } else {
         setErrorMessage(data.deletePlayer.message)
+        setIsErrorModalOpen(true)
+      }
+    },
+    onError: (error) => {
+      setErrorMessage(error.message)
+      setIsErrorModalOpen(true)
+    },
+  })
+
+  const [restorePlayer] = useMutation(RESTORE_PLAYER_MUTATION, {
+    onCompleted: (data) => {
+      if (data.restorePlayer.ok) {
+        const restoredId = data.restorePlayer.player?._id
+        setDeletedPlayersState(prev => prev.filter(p => p._id !== restoredId))
+        refetchPlayers()
+        refetchCount()
+        if (onPlayersUpdated) onPlayersUpdated()
+      } else {
+        setErrorMessage(data.restorePlayer.message)
         setIsErrorModalOpen(true)
       }
     },
@@ -469,8 +585,6 @@ const PlayersPage = ({ onPlayersUpdated, ongoingMatches = {}, matchQueue = {} })
   }
 
   const handleSubmit = async (e) => {
-    try {
-        
     e.preventDefault()
     if (!formData.name.trim()) {
       setErrorMessage('Please enter a player name')
@@ -478,28 +592,20 @@ const PlayersPage = ({ onPlayersUpdated, ongoingMatches = {}, matchQueue = {} })
       return
     }
     setIsSubmitting(true)
-    await createPlayer({
-      variables: {
-        input: {
-          name: formData.name.trim(),
-          gender: formData.gender || null,
-          playerLevel: formData.playerLevel || null,
+    try {
+      await createPlayer({
+        variables: {
+          input: {
+            name: formData.name.trim(),
+            gender: formData.gender || null,
+            playerLevel: formData.playerLevel || null,
+          },
         },
-      },
-    })
-  
+      })
     } catch (error) {
-        console.error(error)
-        // Extract validation errors from GraphQL error extensions
-        if (error.graphQLErrors?.[0]?.extensions?.fields) {
-          const fieldErrors = error.graphQLErrors[0].extensions.fields
-          const errorMessages = fieldErrors.map(f => `${f.path}: ${f.message}`).join('\n')
-          setErrorMessage(errorMessages)
-        } else {
-          setErrorMessage(error.message || 'Unknown error')
-        }
-        setIsErrorModalOpen(true)
-        setIsSubmitting(false)
+      setErrorMessage(getPlayerErrorMessage(error))
+      setIsErrorModalOpen(true)
+      setIsSubmitting(false)
     }
   }
 
@@ -525,6 +631,27 @@ const PlayersPage = ({ onPlayersUpdated, ongoingMatches = {}, matchQueue = {} })
     setIsDeleteConfirmModalOpen(false)
     setPlayerToDelete(null)
     setPlayerNameToDelete('')
+  }
+
+  const handleRestoreClick = (player) => {
+    setPlayerToRestore(player._id)
+    setPlayerNameToRestore(player.name)
+    setIsRestoreConfirmModalOpen(true)
+  }
+
+  const handleConfirmRestore = async () => {
+    if (playerToRestore) {
+      await restorePlayer({ variables: { id: playerToRestore } })
+      setIsRestoreConfirmModalOpen(false)
+      setPlayerToRestore(null)
+      setPlayerNameToRestore('')
+    }
+  }
+
+  const handleCancelRestore = () => {
+    setIsRestoreConfirmModalOpen(false)
+    setPlayerToRestore(null)
+    setPlayerNameToRestore('')
   }
 
   const isPlayerInOngoingMatch = useCallback((playerId) => {
@@ -721,6 +848,16 @@ const PlayersPage = ({ onPlayersUpdated, ongoingMatches = {}, matchQueue = {} })
               </button>
             </>
           )}
+          <button
+            onClick={() => setShowDeletedSection(v => !v)}
+            className={`inline-flex items-center justify-center rounded-lg px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] transition ${
+              showDeletedSection
+                ? 'bg-amber-500/30 text-amber-200 hover:bg-amber-500/40'
+                : 'bg-slate-500/20 text-slate-200 hover:bg-slate-500/30'
+            }`}
+          >
+            🗂 {showDeletedSection ? 'Hide Archived' : `Archived${deletedPlayersState.length > 0 ? ` (${deletedPlayersState.length})` : ''}`}
+          </button>
           <button
             onClick={() => setIsMassAddModalOpen(true)}
             className="inline-flex items-center justify-center rounded-lg bg-blue-500/20 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-blue-200 transition hover:bg-blue-500/30"
@@ -948,6 +1085,76 @@ const PlayersPage = ({ onPlayersUpdated, ongoingMatches = {}, matchQueue = {} })
             <p className="text-sm text-slate-300">
               Page <span className="font-semibold text-white">{currentPage}</span> of <span className="font-semibold text-white">{totalPages}</span> • Total Players: <span className="font-semibold text-white">{totalPlayersCount}</span>
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* Archived Players Section */}
+      {showDeletedSection && (
+        <div className="mt-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <h4 className="text-sm font-semibold text-amber-300">🗂 Archived Players</h4>
+            <button
+              onClick={() => setShowDeletedSection(false)}
+              className="text-xs text-slate-400 hover:text-white transition"
+            >
+              ✕ Close
+            </button>
+          </div>
+          <div className="overflow-x-auto rounded-lg border border-amber-500/20 bg-slate-900/40">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-white/10 bg-slate-900/80">
+                  <th className="px-3.5 py-2 text-left text-xs font-semibold text-slate-200">Name</th>
+                  <th className="px-3.5 py-2 text-left text-xs font-semibold text-slate-200 hidden sm:table-cell">Gender</th>
+                  <th className="px-3.5 py-2 text-left text-xs font-semibold text-slate-200 hidden sm:table-cell">Skill Level</th>
+                  <th className="px-3.5 py-2 text-center text-xs font-semibold text-slate-200 hidden md:table-cell">Games</th>
+                  <th className="px-3.5 py-2 text-center text-xs font-semibold text-slate-200 hidden md:table-cell">W / L</th>
+                  <th className="px-3.5 py-2 text-center text-xs font-semibold text-slate-200">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {deletedPlayersLoading ? (
+                  <tr>
+                    <td colSpan={6} className="px-3.5 py-6 text-center text-sm text-slate-400">Loading archived players...</td>
+                  </tr>
+                ) : deletedPlayersState.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-3.5 py-6 text-center text-sm text-slate-400">No archived players.</td>
+                  </tr>
+                ) : (
+                  deletedPlayersState.map((player) => (
+                    <tr key={player._id} className="border-b border-white/10 opacity-70 transition hover:bg-white/5 hover:opacity-100">
+                      <td className="px-3.5 py-2 text-sm font-medium text-slate-300">{player.name}</td>
+                      <td className="hidden px-3.5 py-2 sm:table-cell">
+                        <span className="inline-flex items-center rounded-full bg-slate-800/50 px-2 py-0.5 text-xs text-slate-200">
+                          {player.gender === 'MALE' ? '♂ Male' : player.gender === 'FEMALE' ? '♀ Female' : '—'}
+                        </span>
+                      </td>
+                      <td className="hidden px-3.5 py-2 sm:table-cell">
+                        <span className="inline-flex items-center rounded-full bg-blue-500/20 px-2 py-0.5 text-xs text-blue-200">
+                          {PLAYER_LEVELS[player.playerLevel] || player.playerLevel || '—'}
+                        </span>
+                      </td>
+                      <td className="hidden px-3.5 py-2 text-center text-xs text-slate-300 md:table-cell">{player.playCount || 0}</td>
+                      <td className="hidden px-3.5 py-2 text-center text-xs md:table-cell">
+                        <span className="text-emerald-300">{player.winCount || 0}W</span>
+                        {' / '}
+                        <span className="text-rose-300">{player.lossCount || 0}L</span>
+                      </td>
+                      <td className="px-3.5 py-2 text-center">
+                        <button
+                          onClick={() => handleRestoreClick(player)}
+                          className="inline-flex items-center justify-center rounded bg-emerald-500/20 px-2 py-0.5 text-xs text-emerald-200 transition hover:bg-emerald-500/30 whitespace-nowrap"
+                        >
+                          ↩ Restore
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
@@ -1180,7 +1387,7 @@ const PlayersPage = ({ onPlayersUpdated, ongoingMatches = {}, matchQueue = {} })
           <div className="w-full max-w-sm rounded-lg border border-rose-500/30 bg-slate-900 p-6">
             <h3 className="mb-2 text-lg font-semibold text-rose-400">Delete Player</h3>
             <p className="mb-5 text-sm text-slate-300">
-              Are you sure you want to delete <span className="font-semibold text-white">{playerNameToDelete}</span>? This action cannot be undone.
+              Are you sure you want to archive <span className="font-semibold text-white">{playerNameToDelete}</span>? The player will be hidden but can be restored later from the Archived section.
             </p>
             <div className="flex gap-3">
               <button
@@ -1205,15 +1412,15 @@ const PlayersPage = ({ onPlayersUpdated, ongoingMatches = {}, matchQueue = {} })
       {isBulkDeleteConfirmModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-lg border border-rose-500/30 bg-slate-900 p-6">
-            <h3 className="mb-2 text-lg font-semibold text-rose-400">Delete Multiple Players</h3>
+            <h3 className="mb-2 text-lg font-semibold text-rose-400">Archive Players</h3>
             <p className="mb-3 text-sm text-slate-300">
-              Are you sure you want to delete <span className="font-semibold text-white">{bulkDeleteCount} player(s)</span>?
+              Are you sure you want to archive <span className="font-semibold text-white">{bulkDeleteCount} player(s)</span>?
             </p>
             <div className="mb-5 max-h-32 overflow-y-auto rounded-lg border border-white/10 bg-slate-800/50 p-3">
               <p className="text-xs text-slate-400 mb-2">Players to be deleted:</p>
               <p className="text-sm text-white">{bulkDeletePlayerNames}</p>
             </div>
-            <p className="mb-5 text-xs text-rose-300">This action cannot be undone.</p>
+            <p className="mb-5 text-xs text-slate-400">Archived players can be restored later from the Archived section.</p>
             <div className="flex gap-3">
               <button
                 type="button"
@@ -1227,7 +1434,34 @@ const PlayersPage = ({ onPlayersUpdated, ongoingMatches = {}, matchQueue = {} })
                 onClick={handleConfirmBulkDelete}
                 className="flex-1 rounded-lg bg-rose-500/20 px-4 py-2 text-sm font-semibold text-rose-200 transition hover:bg-rose-500/30"
               >
-                Delete All
+                Archive All
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isRestoreConfirmModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-lg border border-emerald-500/30 bg-slate-900 p-6">
+            <h3 className="mb-2 text-lg font-semibold text-emerald-400">Restore Player</h3>
+            <p className="mb-5 text-sm text-slate-300">
+              Restore <span className="font-semibold text-white">{playerNameToRestore}</span> to the active player list?
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={handleCancelRestore}
+                className="flex-1 rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-slate-600"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmRestore}
+                className="flex-1 rounded-lg bg-emerald-500/20 px-4 py-2 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-500/30"
+              >
+                Restore
               </button>
             </div>
           </div>
