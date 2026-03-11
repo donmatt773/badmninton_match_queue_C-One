@@ -1,5 +1,17 @@
 import React, { useState } from 'react'
+import { gql } from '@apollo/client'
+import { useQuery } from '@apollo/client/react'
 import StatusBadge from './StatusBadge'
+
+const GAMES_BY_SESSION_IDS_QUERY = gql`
+  query GamesBySessionIds($sessionIds: [ID!]!) {
+    gamesBySessionIds(sessionIds: $sessionIds) {
+      _id
+      sessionId
+      players
+    }
+  }
+`
 
 const formatDateTime = (value) => {
   if (!value) return '—'
@@ -14,20 +26,35 @@ const getOngoingMatchCount = (sessionId, ongoingMatches) => {
   return Array.isArray(matches) ? matches.length : 0
 }
 
-const SessionTable = ({ sessions, ongoingMatches, isLoading, error, onStartSession, onViewSession, onEditSession, onEndSession, onCreateSession, onNavigateToMatches }) => {
+const getSessionRevenue = (session, playerParticipationsBySession) => {
+  const pricePerGame = Number(session?.price || 0)
+  const paidParticipations = Number(playerParticipationsBySession?.get(session?._id) || 0)
+  return paidParticipations * pricePerGame
+}
+
+const formatCurrency = (amount) => {
+  const value = Number(amount || 0)
+  return `P${value.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+}
+
+const SessionTable = ({ sessions, ongoingMatches, isLoading, error, onViewSession, onEditSession, onEndSession, onCreateSession, onNavigateToMatches }) => {
   const [currentPage, setCurrentPage] = useState(1)
   const itemsPerPage = 4
+  const sessionIds = sessions.map((session) => session._id).filter(Boolean)
+  const { data: gamesData } = useQuery(GAMES_BY_SESSION_IDS_QUERY, {
+    variables: { sessionIds },
+    skip: sessionIds.length === 0,
+    fetchPolicy: 'network-only',
+  })
 
-  const getStatusColor = (status) => {
-    const colors = {
-      QUEUED: 'text-blue-300',
-      OPEN: 'text-emerald-300',
-      CLOSED: 'text-slate-400',
-    }
-    return colors[status] || 'text-slate-300'
-  }
+  const playerParticipationsBySession = (gamesData?.gamesBySessionIds || []).reduce((map, game) => {
+    const key = game?.sessionId
+    if (!key) return map
+    const playerCount = Array.isArray(game?.players) ? game.players.length : 0
+    map.set(key, (map.get(key) || 0) + playerCount)
+    return map
+  }, new Map())
 
-  const canStart = (session) => session.status === 'QUEUED'
   const canEnd = (session) => session.status === 'OPEN'
 
   // Pagination calculations
@@ -73,6 +100,7 @@ const SessionTable = ({ sessions, ongoingMatches, isLoading, error, onStartSessi
               <th className="px-3 py-2">Courts</th>
               <th className="px-3 py-2">Players</th>
               <th className="px-3 py-2">Games</th>
+              <th className="px-3 py-2">Revenue</th>
               <th className="px-3 py-2">Started</th>
               <th className="px-3 py-2">Actions</th>
             </tr>
@@ -95,7 +123,7 @@ const SessionTable = ({ sessions, ongoingMatches, isLoading, error, onStartSessi
             ) : sessions.length === 0 ? (
               <tr>
                 <td colSpan="8" className="px-3 py-3 text-center text-xs text-slate-300">
-                  No sessions yet. Create one from the control panel.
+                  No sessions yet.
                 </td>
               </tr>
             ) : (
@@ -118,6 +146,11 @@ const SessionTable = ({ sessions, ongoingMatches, isLoading, error, onStartSessi
                   <td className="px-3 py-2">{session.courts?.length ?? 0}</td>
                   <td className="px-3 py-2">{session.players?.length ?? 0}</td>
                   <td className="px-3 py-2">{getOngoingMatchCount(session._id, ongoingMatches)}</td>
+                  <td className="px-3 py-2">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-200">
+                      {formatCurrency(getSessionRevenue(session, playerParticipationsBySession))}
+                    </span>
+                  </td>
                   <td className="px-3 py-2 text-xs">{formatDateTime(session.startedAt)}</td>
                   <td className="px-3 py-2">
                     <div className="flex gap-1">
@@ -140,14 +173,6 @@ const SessionTable = ({ sessions, ongoingMatches, isLoading, error, onStartSessi
                       >
                         End Session
                       </button>
-                      {canStart(session) && (
-                        <button
-                          onClick={() => onStartSession(session._id)}
-                          className="inline-flex items-center justify-center rounded-full border border-emerald-300/40 px-2 py-0.5 text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-500/10 hover:border-emerald-200/70"
-                        >
-                          Start
-                        </button>
-                      )}
                     </div>
                   </td>
                 </tr>

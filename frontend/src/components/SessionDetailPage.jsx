@@ -77,15 +77,6 @@ const UPDATE_SESSION_MUTATION = gql`
   }
 `
 
-const DELETE_SESSION_MUTATION = gql`
-  mutation DeleteSession($id: ID!) {
-    deleteSession(id: $id) {
-      ok
-      message
-    }
-  }
-`
-
 const END_SESSION_MUTATION = gql`
   mutation EndSession($id: ID!) {
     endSession(id: $id) {
@@ -214,7 +205,6 @@ const SessionDetailPage = ({ sessionId, onClose, ongoingMatches: propOngoingMatc
   
   // Use props passed from parent, with fallback to empty array
   const ongoingMatches = propOngoingMatches || []
-  const setOngoingMatches = setPropOngoingMatches || (() => {})
   const matchQueue = propMatchQueue || []
   const setMatchQueue = setPropMatchQueue || (() => {})
   const [formData, setFormData] = useState({
@@ -226,13 +216,12 @@ const SessionDetailPage = ({ sessionId, onClose, ongoingMatches: propOngoingMatc
   const { data: sessionData, loading: sessionLoading, error: sessionError } = useQuery(SESSION_QUERY, {
     variables: { id: sessionId }
   })
-  const { data: gamesData, loading: gamesLoading } = useQuery(GAMES_QUERY, {
+  const { data: gamesData } = useQuery(GAMES_QUERY, {
     variables: { sessionId }
   })
   const { data: courtsData, loading: courtsLoading } = useQuery(COURTS_QUERY)
   const { data: playersData, loading: playersLoading } = useQuery(PLAYERS_QUERY)
   const [updateSession, { loading: updateLoading }] = useMutation(UPDATE_SESSION_MUTATION)
-  const [deleteSession, { loading: deleteLoading }] = useMutation(DELETE_SESSION_MUTATION)
   const [endSession, { loading: endSessionLoading }] = useMutation(END_SESSION_MUTATION)
   const [recordGame, { loading: recordGameLoading }] = useMutation(RECORD_GAME_MUTATION, {
     refetchQueries: [
@@ -262,8 +251,7 @@ const SessionDetailPage = ({ sessionId, onClose, ongoingMatches: propOngoingMatc
   const courts = courtsData?.courts || []
   const players = playersData?.players || []
 
-  const canEdit = true
-  const canDelete = session?.status === 'QUEUED' || session?.status === 'OPEN'
+
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -313,24 +301,6 @@ const SessionDetailPage = ({ sessionId, onClose, ongoingMatches: propOngoingMatc
         ? prev.players.filter(id => id !== playerId)
         : [...prev.players, playerId]
     }))
-  }
-
-  const handleDelete = async () => {
-    if (window.confirm(`Are you sure you want to delete session "${session.name}"?`)) {
-      try {
-        const result = await deleteSession({
-          variables: { id: sessionId }
-        })
-        
-        if (result.data.deleteSession.ok) {
-          onClose?.()
-        } else {
-          alert(result.data.deleteSession.message)
-        }
-      } catch (err) {
-        alert(err.message)
-      }
-    }
   }
 
   const handleRecordGame = async (matchData) => {
@@ -424,33 +394,6 @@ const SessionDetailPage = ({ sessionId, onClose, ongoingMatches: propOngoingMatc
     }
   }
 
-  const handleCancelMatch = async (matchId) => {
-    try {
-      // Call backend mutation to delete match
-      const result = await endMatch({
-        variables: { id: matchId }
-      })
-
-      if (result.data?.endMatch?.ok) {
-        // Remove from state
-        const updated = ongoingMatches.filter(m => m._id !== matchId)
-        if (setPropOngoingMatches) {
-          setPropOngoingMatches(updated)
-        }
-      } else {
-        alert(result.data?.endMatch?.message || 'Failed to cancel match')
-      }
-    } catch (err) {
-      console.error('Error canceling match:', err)
-      alert('Error: ' + err.message)
-    }
-  }
-
-  const handleEndMatch = (match) => {
-    setSelectedMatchForWinners(match)
-    setSelectedWinners([])
-  }
-
   const handleWinnerToggle = (playerId) => {
     setSelectedWinners(prev => 
       prev.includes(playerId)
@@ -480,8 +423,6 @@ const SessionDetailPage = ({ sessionId, onClose, ongoingMatches: propOngoingMatc
       winnerPlayerIds: selectedWinners,
       finishedAt: new Date().toISOString()
     }
-
-    console.log('Submitting game:', gameInput)
 
     try {
       // Record the game
@@ -544,29 +485,6 @@ const SessionDetailPage = ({ sessionId, onClose, ongoingMatches: propOngoingMatc
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-semibold text-white sm:text-2xl">Session Details</h1>
-          {canEdit && (
-            <button
-              onClick={() => {
-                setIsEditing(!isEditing)
-                if (isEditing) {
-                  setPlayerSearchTerm('')
-                  setPlayerSortBy('')
-                }
-              }}
-              className="inline-flex items-center justify-center rounded-full border border-blue-300/40 px-3 py-2 text-xs font-semibold text-blue-200 transition hover:bg-blue-500/10 hover:border-blue-200/70"
-            >
-              {isEditing ? 'Cancel Edit' : 'Edit'}
-            </button>
-          )}
-          {canDelete && (
-            <button
-              onClick={handleDelete}
-              disabled={deleteLoading}
-              className="inline-flex items-center justify-center rounded-full border border-rose-300/40 px-3 py-2 text-xs font-semibold text-rose-200 transition hover:bg-rose-500/10 hover:border-rose-200/70 disabled:opacity-50"
-            >
-              Delete
-            </button>
-          )}
         </div>
       </div>
 
@@ -837,7 +755,7 @@ const SessionDetailPage = ({ sessionId, onClose, ongoingMatches: propOngoingMatc
                   <p className="text-sm text-slate-400">No players</p>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 overflow-visible">
-                    {session.players?.map((sessionPlayer, index) => {
+                    {session.players?.map((sessionPlayer) => {
                       const player = players.find(p => p._id === sessionPlayer.playerId)
                       
                       // Calculate wins and losses from games data
@@ -854,8 +772,6 @@ const SessionDetailPage = ({ sessionId, onClose, ongoingMatches: propOngoingMatc
                             losses++
                           }
                           
-                          // Store game details for tooltip
-                          const gamePlayers = game.players.map(pid => players.find(p => p._id === pid)?.name || 'Unknown')
                           const teammates = game.players
                             .filter(pid => pid !== sessionPlayer.playerId && game.winnerPlayerIds.includes(pid) === isWinner)
                             .map(pid => players.find(p => p._id === pid)?.name || 'Unknown')

@@ -10,7 +10,6 @@ const DashboardPage = ({
   courts,
   isLoading,
   error,
-  onStartSession,
   onViewSession,
   onEditSession,
   onEndSession,
@@ -35,7 +34,6 @@ const DashboardPage = ({
         ongoingMatches={ongoingMatches}
         isLoading={isLoading}
         error={error}
-        onStartSession={onStartSession}
         onViewSession={onViewSession}
         onEditSession={onEditSession}
         onEndSession={onEndSession}

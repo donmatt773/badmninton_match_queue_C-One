@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import { useQuery } from '@apollo/client/react'
 import { gql } from '@apollo/client'
 import StatusBadge from './StatusBadge'
@@ -40,6 +40,7 @@ const SESSION_QUERY = gql`
       _id
       name
       status
+      price
       courts
       players {
         playerId
@@ -68,6 +69,21 @@ const GAMES_QUERY = gql`
   }
 `
 
+const BILLING_BY_SESSION_QUERY = gql`
+  query BillingBySession($sessionId: ID!) {
+    billingBySession(sessionId: $sessionId) {
+      ok
+      payment {
+        pricePerGame
+        players {
+          playerId
+          gamesPlayed
+        }
+      }
+    }
+  }
+`
+
 const formatDateTime = (value) => {
   if (!value) return '—'
   const date = new Date(value)
@@ -80,7 +96,9 @@ const formatDateTime = (value) => {
 const SessionRecordDetail = ({ sessionId, onClose }) => {
   const [activeTab, setActiveTab] = useState('overview')
   const [playerSearchTerm, setPlayerSearchTerm] = useState('')
+  const [playerPage, setPlayerPage] = useState(1)
   const [matchHistoryPage, setMatchHistoryPage] = useState(1)
+  const playersPerPage = 5
   const matchesPerPage = 5
 
   const { data: sessionData, loading: sessionLoading, error: sessionError } = useQuery(SESSION_QUERY, {
@@ -89,26 +107,80 @@ const SessionRecordDetail = ({ sessionId, onClose }) => {
   const { data: gamesData, loading: gamesLoading } = useQuery(GAMES_QUERY, {
     variables: { sessionId }
   })
+  const { data: billingData } = useQuery(BILLING_BY_SESSION_QUERY, {
+    variables: { sessionId },
+    skip: !sessionId,
+  })
   const { data: courtsData } = useQuery(COURTS_QUERY)
   const { data: playersData } = useQuery(PLAYERS_QUERY)
 
   const session = sessionData?.session
   const courts = courtsData?.courts || []
-  const players = playersData?.players || []
+  const players = useMemo(() => playersData?.players || [], [playersData?.players])
+  const billedPlayers = useMemo(() => billingData?.billingBySession?.payment?.players || [], [billingData?.billingBySession?.payment?.players])
+  const hasBillingSnapshot = billedPlayers.length > 0
+
+  const gamesPlayedByPlayer = useMemo(() => {
+    const map = new Map()
+    const games = gamesData?.gamesBySession || []
+
+    games.forEach((game) => {
+      if (!Array.isArray(game?.players)) return
+      game.players.forEach((playerId) => {
+        const key = String(playerId)
+        map.set(key, (map.get(key) || 0) + 1)
+      })
+    })
+
+    return map
+  }, [gamesData])
+
+  const allPlayerIds = useMemo(() => {
+    const ids = new Set()
+
+    ;(session?.players || []).forEach((item) => {
+      if (item?.playerId) ids.add(String(item.playerId))
+    })
+
+    billedPlayers.forEach((item) => {
+      if (item?.playerId) ids.add(String(item.playerId))
+    })
+
+    gamesPlayedByPlayer.forEach((_count, playerId) => ids.add(playerId))
+
+    return Array.from(ids)
+  }, [session?.players, billedPlayers, gamesPlayedByPlayer])
+
+  const paidGamesByPlayer = useMemo(() => {
+    const map = new Map()
+
+    billedPlayers.forEach((item) => {
+      map.set(String(item.playerId), Number(item.gamesPlayed || 0))
+    })
+
+    // Backward-compatible fallback for sessions closed before billing snapshots were complete.
+    if (map.size === 0) {
+      gamesPlayedByPlayer.forEach((gamesPlayed, playerId) => {
+        map.set(playerId, Number(gamesPlayed || 0))
+      })
+    }
+
+    return map
+  }, [billedPlayers, gamesPlayedByPlayer])
 
   // Filter and calculate player stats
   const playerStats = useMemo(() => {
-    if (!session?.players || !gamesData?.gamesBySession) return []
+    if (!gamesData?.gamesBySession) return []
 
-    return session.players.map(sessionPlayer => {
-      const player = players.find(p => p._id === sessionPlayer.playerId)
+    return allPlayerIds.map(playerId => {
+      const player = players.find(p => String(p._id) === playerId)
       
       let wins = 0
       let losses = 0
       
       gamesData.gamesBySession.forEach(game => {
-        if (game.players.includes(sessionPlayer.playerId)) {
-          if (game.winnerPlayerIds.includes(sessionPlayer.playerId)) {
+        if (game.players.includes(playerId)) {
+          if (game.winnerPlayerIds.includes(playerId)) {
             wins++
           } else {
             losses++
@@ -116,20 +188,50 @@ const SessionRecordDetail = ({ sessionId, onClose }) => {
         }
       })
       
-      const totalGames = wins + losses
+      const totalGames = gamesPlayedByPlayer.get(playerId) || (wins + losses)
       const winRate = totalGames > 0 ? ((wins / totalGames) * 100).toFixed(1) : '0.0'
+      const paidGamesRaw = paidGamesByPlayer.get(playerId) || 0
+      const paidGames = hasBillingSnapshot
+        ? Math.min(Number(totalGames || 0), paidGamesRaw)
+        : Number(totalGames || 0)
+      const unpaidGames = hasBillingSnapshot
+        ? Math.max(Number(totalGames || 0) - paidGames, 0)
+        : 0
       
       return {
-        playerId: sessionPlayer.playerId,
+        playerId,
         player,
-        gamesPlayed: sessionPlayer.gamesPlayed,
+        gamesPlayed: totalGames,
+        paidGames,
+        unpaidGames,
         wins,
         losses,
         winRate,
         name: player?.name || 'Unknown'
       }
     })
-  }, [session?.players, gamesData?.gamesBySession, players])
+  }, [allPlayerIds, gamesData?.gamesBySession, players, paidGamesByPlayer, gamesPlayedByPlayer, hasBillingSnapshot])
+
+  const paymentTotals = useMemo(() => {
+    const totalPaid = playerStats.reduce((sum, stat) => sum + stat.paidGames, 0)
+    const totalUnpaid = playerStats.reduce((sum, stat) => sum + stat.unpaidGames, 0)
+    const billingPricePerGameRaw = billingData?.billingBySession?.payment?.pricePerGame
+    const billingPricePerGame = Number(billingPricePerGameRaw)
+    const sessionPrice = Number(session?.price)
+
+    const hasBillingPrice = billingPricePerGameRaw !== null && billingPricePerGameRaw !== undefined && !Number.isNaN(billingPricePerGame)
+    const hasSessionPrice = session?.price !== null && session?.price !== undefined && !Number.isNaN(sessionPrice)
+
+    const effectivePricePerGame = hasBillingPrice && billingPricePerGame > 0
+      ? billingPricePerGame
+      : hasSessionPrice
+      ? sessionPrice
+      : (hasBillingPrice ? billingPricePerGame : 0)
+
+    const totalPaidAmount = totalPaid * effectivePricePerGame
+    const totalUnpaidAmount = totalUnpaid * effectivePricePerGame
+    return { totalPaid, totalUnpaid, totalPaidAmount, totalUnpaidAmount, effectivePricePerGame }
+  }, [playerStats, billingData, session?.price])
 
   const filteredPlayers = useMemo(() => {
     const term = playerSearchTerm.trim().toLowerCase()
@@ -139,6 +241,24 @@ const SessionRecordDetail = ({ sessionId, onClose }) => {
       stat.name.toLowerCase().includes(term)
     )
   }, [playerStats, playerSearchTerm])
+
+  const totalPlayerPages = Math.max(1, Math.ceil(filteredPlayers.length / playersPerPage))
+
+  const paginatedPlayers = useMemo(() => {
+    const startIndex = (playerPage - 1) * playersPerPage
+    const endIndex = startIndex + playersPerPage
+    return filteredPlayers.slice(startIndex, endIndex)
+  }, [filteredPlayers, playerPage, playersPerPage])
+
+  useEffect(() => {
+    setPlayerPage(1)
+  }, [playerSearchTerm, sessionId])
+
+  useEffect(() => {
+    if (playerPage > totalPlayerPages) {
+      setPlayerPage(totalPlayerPages)
+    }
+  }, [playerPage, totalPlayerPages])
 
   if (sessionLoading) {
     return (
@@ -189,7 +309,7 @@ const SessionRecordDetail = ({ sessionId, onClose }) => {
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            Courts ({session.courts?.length || 0})
+            Courts
           </button>
           <button
             onClick={() => setActiveTab('players')}
@@ -199,7 +319,7 @@ const SessionRecordDetail = ({ sessionId, onClose }) => {
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            Players ({session.players?.length || 0})
+            Players
           </button>
           <button
             onClick={() => setActiveTab('matches')}
@@ -243,6 +363,24 @@ const SessionRecordDetail = ({ sessionId, onClose }) => {
                     <p className="mt-1 text-sm font-bold text-white">{formatDateTime(session.endedAt)}</p>
                   </div>
                 </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Price Per Game</label>
+                    <p className="mt-1 text-sm font-bold text-white">₱{paymentTotals.effectivePricePerGame}</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 pt-2 border-t border-white/10">
+                  <div>
+                    <label className="text-xs font-semibold uppercase tracking-[0.3em] text-emerald-400">Total Paid</label>
+                    <p className="mt-1 text-sm font-bold text-emerald-300">{paymentTotals.totalPaid} Game{paymentTotals.totalPaid !== 1 ? 's' : ''} = ₱{paymentTotals.totalPaidAmount}</p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold uppercase tracking-[0.3em] text-amber-400">Total Unpaid</label>
+                    <p className="mt-1 text-sm font-bold text-amber-300">{paymentTotals.totalUnpaid} Game{paymentTotals.totalUnpaid !== 1 ? 's' : ''} = ₱{paymentTotals.totalUnpaidAmount}</p>
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -284,34 +422,73 @@ const SessionRecordDetail = ({ sessionId, onClose }) => {
                 <p className="text-sm text-slate-400">No players found</p>
               ) : (
                 <div className="space-y-2">
-                  {filteredPlayers.map(stat => (
-                    <div key={stat.playerId} className="rounded-lg border border-white/10 bg-white/5 p-3">
-                      <div className="mb-2">
-                        <div className="font-medium text-white">{stat.name}</div>
-                        <div className="text-xs text-slate-400">
-                          {stat.player?.gender || 'N/A'} • {formatPlayerLevel(stat.player?.playerLevel) || 'N/A'}
-                        </div>
+                  {paginatedPlayers.map(stat => (
+                    <div key={stat.playerId} className="rounded-lg border border-white/10 bg-white/5 p-1.5">
+                      <div className="mb-0.5 text-[10px] text-slate-300">
+                        <span className="font-semibold text-white">{stat.name}</span>
+                        <span className="mx-1 text-slate-500">•</span>
+                        <span>{stat.player?.gender || 'N/A'}</span>
+                        <span className="mx-1 text-slate-500">•</span>
+                        <span>{formatPlayerLevel(stat.player?.playerLevel) || 'N/A'}</span>
                       </div>
-                      <div className="flex gap-4">
+                      <div className="flex flex-wrap gap-1.5">
                         <div className="text-center flex-1">
-                          <div className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Played</div>
-                          <div className="text-sm font-semibold text-white">{stat.gamesPlayed}</div>
+                          <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-400">Played</div>
+                          <div className="text-[11px] font-semibold text-white">{stat.gamesPlayed}</div>
                         </div>
                         <div className="text-center flex-1">
-                          <div className="text-xs font-semibold uppercase tracking-[0.3em] text-emerald-400">Won</div>
-                          <div className="text-sm font-semibold text-emerald-300">{stat.wins}</div>
+                          <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-emerald-400">Paid</div>
+                          <div className="text-[11px] font-semibold text-emerald-300">{stat.paidGames}</div>
                         </div>
                         <div className="text-center flex-1">
-                          <div className="text-xs font-semibold uppercase tracking-[0.3em] text-rose-400">Lost</div>
-                          <div className="text-sm font-semibold text-rose-300">{stat.losses}</div>
+                          <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-amber-400">Unpaid</div>
+                          <div className="text-[11px] font-semibold text-amber-300">{stat.unpaidGames}</div>
                         </div>
                         <div className="text-center flex-1">
-                          <div className="text-xs font-semibold uppercase tracking-[0.3em] text-blue-400">Win Rate</div>
-                          <div className="text-sm font-semibold text-blue-300">{stat.winRate}%</div>
+                          <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-emerald-400">Won</div>
+                          <div className="text-[11px] font-semibold text-emerald-300">{stat.wins}</div>
+                        </div>
+                        <div className="text-center flex-1">
+                          <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-rose-400">Lost</div>
+                          <div className="text-[11px] font-semibold text-rose-300">{stat.losses}</div>
+                        </div>
+                        <div className="text-center flex-1">
+                          <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-blue-400">Win Rate</div>
+                          <div className="text-[11px] font-semibold text-blue-300">{stat.winRate}%</div>
                         </div>
                       </div>
                     </div>
                   ))}
+
+                  {totalPlayerPages > 1 && (
+                    <div className="flex items-center justify-between border-t border-white/10 pt-4">
+                      <button
+                        onClick={() => setPlayerPage(prev => Math.max(1, prev - 1))}
+                        disabled={playerPage === 1}
+                        className="inline-flex items-center gap-2 rounded-lg border border-white/20 px-4 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/5 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                        </svg>
+                        Previous
+                      </button>
+
+                      <span className="text-xs text-slate-400">
+                        Page {playerPage} of {totalPlayerPages}
+                      </span>
+
+                      <button
+                        onClick={() => setPlayerPage(prev => Math.min(totalPlayerPages, prev + 1))}
+                        disabled={playerPage === totalPlayerPages}
+                        className="inline-flex items-center gap-2 rounded-lg border border-white/20 px-4 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/5 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Next
+                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -337,7 +514,6 @@ const SessionRecordDetail = ({ sessionId, onClose }) => {
                   <div className="space-y-2">
                     {(() => {
                       const allMatches = gamesData?.gamesBySession || []
-                      const totalPages = Math.ceil(allMatches.length / matchesPerPage)
                       const startIndex = (matchHistoryPage - 1) * matchesPerPage
                       const endIndex = startIndex + matchesPerPage
                       const paginatedMatches = allMatches.slice(startIndex, endIndex)

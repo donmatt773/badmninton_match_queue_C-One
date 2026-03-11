@@ -46,6 +46,10 @@ const sessionSchema = new mongoose.Schema(
       default: false,
       index: true,
     },
+    price: {type: Number,
+      default: null,
+      min: 0,
+    },
   },
   { timestamps: true }
 );

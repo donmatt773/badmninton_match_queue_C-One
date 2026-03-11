@@ -11,8 +11,6 @@ const COURT_SURFACE_TYPES = {
   'CONCRETE': 'Concrete',
 }
 
-const formatCourtSurfaceType = (value) => COURT_SURFACE_TYPES[value] ?? value
-
 const COURT_STATUS_LABELS = {
   'ACTIVE': 'Available',
   'OCCUPIED': 'InUse',
@@ -38,6 +36,7 @@ const GAMES_BY_SESSION_QUERY = gql`
     gamesBySession(sessionId: $sessionId) {
       _id
       players
+      winnerPlayerIds
     }
   }
 `;
@@ -50,6 +49,7 @@ const GAMES_SUBSCRIPTION = gql`
         _id
         sessionId
         players
+        winnerPlayerIds
       }
     }
   }
@@ -186,8 +186,6 @@ const CreateMatchForm = ({
   const [sortBySkill, setSortBySkill] = useState("none"); // none, asc, desc
   const [filterBySkill, setFilterBySkill] = useState("all"); // all, BEGINNER, INTERMEDIATE, UPPERINTERMEDIATE, ADVANCED
   const [showAvailableOnly, setShowAvailableOnly] = useState(false);
-  const [openTeam1Dropdown, setOpenTeam1Dropdown] = useState(false);
-  const [openTeam2Dropdown, setOpenTeam2Dropdown] = useState(false);
   const [currentPlayerPage, setCurrentPlayerPage] = useState(0);
   const [activeDragId, setActiveDragId] = useState(null);
 
@@ -199,7 +197,7 @@ const CreateMatchForm = ({
     })
   );
 
-  const { data: courtsData, loading: courtsLoading } = useQuery(COURTS_QUERY);
+  const { data: courtsData } = useQuery(COURTS_QUERY);
   const { data: sessionGamesData } = useQuery(GAMES_BY_SESSION_QUERY, {
     variables: { sessionId: selectedSessionId },
     skip: !selectedSessionId,
@@ -236,8 +234,6 @@ const CreateMatchForm = ({
       setSortBySkill("none");
       setFilterBySkill("all");
       setShowAvailableOnly(false);
-      setOpenTeam1Dropdown(false);
-      setOpenTeam2Dropdown(false);
     }
   }, [isOpen, currentSessionId, sessions]);
 
@@ -338,35 +334,38 @@ const CreateMatchForm = ({
       map.get(a).add(b);
     };
 
-    console.log('Building opponents map from games:', sessionGames);
-    
     for (const game of sessionGames) {
-      console.log('Processing game:', game);
-      console.log('Game players:', game?.players);
-      const ids = Array.isArray(game?.players) ? game.players.map(String) : [];
-      console.log('Converted IDs:', ids);
-      
-      if (ids.length < 2) {
-        console.log('Not enough players, skipping game');
+      const players = Array.isArray(game?.players) ? game.players.map(String) : [];
+      const winners = Array.isArray(game?.winnerPlayerIds) ? game.winnerPlayerIds.map(String) : [];
+
+      if (players.length < 2) {
         continue;
       }
 
-      const midpoint = Math.floor(ids.length / 2);
-      const teamA = ids.slice(0, midpoint);
-      const teamB = ids.slice(midpoint);
-      console.log('Team A:', teamA, 'Team B:', teamB);
+      // Determine teams based on winners
+      // If we have winner info, use it to determine teams
+      // Otherwise fall back to splitting in half
+      let teamA, teamB;
+      if (winners.length > 0 && winners.length < players.length) {
+        const winnerSet = new Set(winners);
+        teamA = players.filter(p => winnerSet.has(p));
+        teamB = players.filter(p => !winnerSet.has(p));
+      } else {
+        // Fallback: split in half
+        const midpoint = Math.floor(players.length / 2);
+        teamA = players.slice(0, midpoint);
+        teamB = players.slice(midpoint);
+      }
 
       // Add opponent relationships: Team A vs Team B
       for (const playerA of teamA) {
         for (const playerB of teamB) {
-          console.log(`Adding opponent pair: ${playerA} vs ${playerB}`);
           addOpponentPair(playerA, playerB);
           addOpponentPair(playerB, playerA);
         }
       }
     }
 
-    console.log('Final opponents map:', map);
     return map;
   }, [sessionGames]);
 
@@ -374,22 +373,15 @@ const CreateMatchForm = ({
     const selectedIds = [...team1, ...team2].map(String);
     const set = new Set();
 
-    console.log('CreateMatchForm - Selected IDs:', selectedIds);
-    console.log('CreateMatchForm - Session Games:', sessionGames);
-    console.log('CreateMatchForm - Opponents by Player:', opponentsByPlayer);
-
     for (const selectedId of selectedIds) {
       const opponents = opponentsByPlayer.get(selectedId);
-      console.log(`CreateMatchForm - Opponents for ${selectedId}:`, opponents);
       if (!opponents) continue;
       for (const opponentId of opponents) {
         set.add(opponentId);
       }
     }
-
-    console.log('CreateMatchForm - Played against selected set:', set);
     return set;
-  }, [team1, team2, opponentsByPlayer, sessionGames]);
+  }, [team1, team2, opponentsByPlayer]);
 
   // Filter by search term
   if (searchTerm.trim()) {
@@ -451,14 +443,6 @@ const CreateMatchForm = ({
   const team1SkillLevel = calculateTeamSkillLevel(team1);
   const team2SkillLevel = calculateTeamSkillLevel(team2);
 
-  const handleAddToTeam = (playerId, team) => {
-    if (team === 1) {
-      setTeam1([...team1, playerId]);
-    } else {
-      setTeam2([...team2, playerId]);
-    }
-  };
-
   const handleRemoveFromTeam = (playerId, team) => {
     if (team === 1) {
       setTeam1(team1.filter((id) => id !== playerId));
@@ -516,12 +500,6 @@ const CreateMatchForm = ({
   const getPlayerName = (playerId) => {
     return (
       playersInSession.find((p) => p._id === playerId)?.name || "Unknown"
-    );
-  };
-
-  const getPlayerGender = (playerId) => {
-    return (
-      playersInSession.find((p) => p._id === playerId)?.gender || "N/A"
     );
   };
 
@@ -806,9 +784,6 @@ const CreateMatchForm = ({
                     {pagedPlayers.length > 0 ? (
                       pagedPlayers.map((player) => {
                         const hasPlayed = playedWithSelectedSet.has(String(player._id));
-                        if (hasPlayed) {
-                          console.log(`Player ${player.name} (${player._id}) has played with selected`);
-                        }
                         return (
                         <DraggablePlayer
                           key={player._id}

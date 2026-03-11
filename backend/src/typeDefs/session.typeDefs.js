@@ -22,6 +22,7 @@ const sessionTypeDef = gql`
     startedAt: String
     endedAt: String
     isArchived: Boolean!
+    price: Float
     createdAt: String!
     updatedAt: String!
   }
@@ -32,16 +33,24 @@ const sessionTypeDef = gql`
     session: Session
   }
 
+  type SessionsMutationResponse {
+    ok: Boolean!
+    message: String!
+    sessions: [Session!]!
+  }
+
   input CreateSessionInput {
     name: String!
     courtIds: [ID!]!
     playerIds: [ID!]!
+    price: Float
   }
 
   input UpdateSessionInput {
     name: String
     courtIds: [ID!]
     playerIds: [ID!]
+    price: Float
   }
 
   input AddSessionPlayersInput {
@@ -63,6 +72,7 @@ const sessionTypeDef = gql`
     endSession(id: ID!): SessionMutationResponse!
     closeSession(id: ID!): SessionMutationResponse!
     archiveSession(id: ID!): SessionMutationResponse!
+    removePlayerFromSessions(playerId: ID!, sessionIds: [ID!]!): SessionsMutationResponse!
   }
 
   enum SessionSubType {

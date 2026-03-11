@@ -195,10 +195,6 @@ const EditMatchForm = ({
     return players?.find(p => p._id === playerId)?.playerLevel || 'N/A'
   }
 
-  const getPlayerGender = (playerId) => {
-    return players?.find(p => p._id === playerId)?.gender || 'N/A'
-  }
-
   const getCourtName = (courtId) => {
     return courts?.find(c => c._id === courtId)?.name || 'Unknown'
   }

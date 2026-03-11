@@ -103,14 +103,16 @@ const OngoingMatchesTable = ({ ongoingMatches, sessions, players, courts, onUpda
               Matches currently in progress.
             </p>
           </div>
-          {onCreateMatch && (
-            <button
-              onClick={onCreateMatch}
-              className="rounded-lg bg-emerald-500/20 px-4 py-2 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/30"
-            >
-              + Create Match
-            </button>
-          )}
+          <div className="flex gap-2">
+            {onCreateMatch && (
+              <button
+                onClick={onCreateMatch}
+                className="rounded-lg bg-emerald-500/20 px-4 py-2 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/30"
+              >
+                + Create Match
+              </button>
+            )}
+          </div>
         </header>
         <div className="rounded-2xl border border-white/10 overflow-hidden">
           <div className="px-4 py-6 text-center text-sm text-slate-300">
@@ -130,14 +132,16 @@ const OngoingMatchesTable = ({ ongoingMatches, sessions, players, courts, onUpda
             {flattenedMatches.length} match{flattenedMatches.length !== 1 ? 'es' : ''} currently in progress.
           </p>
         </div>
-        {onCreateMatch && (
-          <button
-            onClick={onCreateMatch}
-            className="rounded-lg bg-emerald-500/20 px-4 py-2 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/30"
-          >
-            + Create Match
-          </button>
-        )}
+        <div className="flex gap-2">
+          {onCreateMatch && (
+            <button
+              onClick={onCreateMatch}
+              className="rounded-lg bg-emerald-500/20 px-4 py-2 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/30"
+            >
+              + Create Match
+            </button>
+          )}
+        </div>
       </header>
 
       <div className="overflow-x-auto rounded-2xl border border-white/10">
@@ -154,7 +158,7 @@ const OngoingMatchesTable = ({ ongoingMatches, sessions, players, courts, onUpda
           </thead>
           <tbody className="divide-y divide-white/10">
             {flattenedMatches.map((match) => (
-              <tr key={match._id} className="transition hover:bg-white/5">
+              <tr key={`${match.sessionId}-${match._id}`} className="transition hover:bg-white/5">
                 <td className="px-3 py-3">
                   <span className="font-semibold text-white text-xs">{match.sessionName}</span>
                 </td>

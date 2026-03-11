@@ -110,7 +110,7 @@ const formatDateTime = (value) => {
   return date.toLocaleString('en-US', options)
 }
 
-const RecordsPage = ({ onViewSession }) => {
+const RecordsPage = () => {
   const { data: sessionsData, loading: sessionsLoading, refetch: refetchSessions } = useQuery(CLOSED_SESSIONS_QUERY, {
     fetchPolicy: 'network-only'
   })
@@ -120,8 +120,8 @@ const RecordsPage = ({ onViewSession }) => {
     skip: sessionIds.length === 0, // Skip query if no archived sessions
     fetchPolicy: 'network-only'
   })
-  const { data: subData, loading: subLoading, error: subError } = useSubscription(GAMES_SUBSCRIPTION)
-  const { data: sessionSubData, loading: sessionSubLoading, error: sessionSubError } = useSubscription(SESSION_SUBSCRIPTION)
+  const { data: subData } = useSubscription(GAMES_SUBSCRIPTION)
+  const { data: sessionSubData } = useSubscription(SESSION_SUBSCRIPTION)
   const [searchTerm, setSearchTerm] = useState('')
   const [sortOrder, setSortOrder] = useState('desc')
   const [dateFilter, setDateFilter] = useState('')
@@ -133,18 +133,16 @@ const RecordsPage = ({ onViewSession }) => {
   const selectAllRef = useRef(null)
   const [archiveSession, { loading: archiveLoading }] = useMutation(ARCHIVE_SESSION_MUTATION)
   
-  const sessions = sessionsData?.closedSessions || []
+  const sessions = useMemo(() => sessionsData?.closedSessions || [], [sessionsData?.closedSessions])
   
   // Handle subscription updates - refetch when games are created or sessions change status
   useEffect(() => {
     // When a game is created, refetch to capture any newly-closed sessions and games
     if (subData?.gameSub?.type === 'CREATED') {
       refetchSessions()
-      if (refetchGames) {
-        refetchGames()
-      }
+      refetchGames()
     }
-  }, [subData?.gameSub?.game, refetchSessions])
+  }, [subData?.gameSub?.type, refetchSessions, refetchGames])
 
   // Handle session status changes
   useEffect(() => {
@@ -153,11 +151,9 @@ const RecordsPage = ({ onViewSession }) => {
     // Refetch on any session change: CLOSED, UPDATED, ARCHIVED
     if (type === 'CLOSED' || type === 'UPDATED' || type === 'ARCHIVED') {
       refetchSessions()
-      if (refetchGames) {
-        refetchGames()
-      }
+      refetchGames()
     }
-  }, [sessionSubData?.sessionSub?.type, sessionSubData?.sessionSub?.session?._id, refetchSessions])
+  }, [sessionSubData?.sessionSub?.type, sessionSubData?.sessionSub?.session?._id, refetchSessions, refetchGames])
 
   const games = useMemo(() => {
     const baseGames = data?.gamesBySessionIds || []
@@ -272,8 +268,14 @@ const RecordsPage = ({ onViewSession }) => {
   const hasVisibleSelections = visibleSessionIds.some(id => selectedSessions.includes(id))
 
   useEffect(() => {
-    setSelectedSessions(prev => prev.filter(id => sessionRecords.some(record => record.sessionId === id)))
-  }, [sessionRecords])
+    // Only filter out selections if sessions were actually deleted
+    setSelectedSessions(prev => {
+      const filtered = prev.filter(id => sessionRecords.some(record => record.sessionId === id))
+      // Only update state if something actually changed
+      return filtered.length === prev.length ? prev : filtered
+    })
+  }, [sessionRecords.length, sessionRecords.map(r => r.sessionId).join(',')])
+
 
   useEffect(() => {
     if (!selectAllRef.current) return

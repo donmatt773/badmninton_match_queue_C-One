@@ -1,4 +1,5 @@
 import Court from '../models/Court.model.js';
+import Game from '../models/Game.model.js';
 import OngoingMatch from '../models/OngoingMatch.model.js';
 import Payment from '../models/Payment.model.js';
 import Player from '../models/Player.model.js';
@@ -77,11 +78,24 @@ const closeSessionWithSnapshot = async (sessionId) => {
       settings = await Settings.create({ scope: 'GLOBAL', pricePerGame: 0 });
     }
 
-    const pricePerGame = settings.pricePerGame;
-    const playersBreakdown = sessionDoc.players.map((item) => ({
-      playerId: item.playerId,
-      gamesPlayed: item.gamesPlayed,
-      total: item.gamesPlayed * pricePerGame,
+    const pricePerGame = sessionDoc.price ?? settings.pricePerGame;
+
+    // Build billing snapshot from completed games so finished/removed players are still billed correctly.
+    const gamePlayerCounts = await Game.aggregate([
+      { $match: { sessionId: sessionDoc._id } },
+      { $unwind: '$players' },
+      {
+        $group: {
+          _id: '$players',
+          gamesPlayed: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const playersBreakdown = gamePlayerCounts.map((item) => ({
+      playerId: item._id,
+      gamesPlayed: Number(item.gamesPlayed || 0),
+      total: Number(item.gamesPlayed || 0) * pricePerGame,
     }));
 
     const totalRevenue = playersBreakdown.reduce((sum, item) => sum + item.total, 0);
@@ -157,6 +171,7 @@ const sessionResolver = {
             playerId: toObjectId(playerId),
             gamesPlayed: 0,
           })),
+          price: input.price !== undefined ? input.price : null,
         });
 
         pubsub.publish(SESSION_SUB_TRIGGER, {
@@ -179,6 +194,10 @@ const sessionResolver = {
 
         if (input.name !== undefined) {
           sessionDoc.name = input.name;
+        }
+
+        if (input.price !== undefined) {
+          sessionDoc.price = input.price;
         }
 
         if (input.courtIds !== undefined) {
@@ -381,6 +400,32 @@ const sessionResolver = {
         return { ok: true, message: 'Session archived successfully', session: sessionDoc }
       } catch (error) {
         return { ok: false, message: error.message, session: null }
+      }
+    },
+
+    removePlayerFromSessions: async (_, { playerId, sessionIds }) => {
+      try {
+        const sessions = await Session.find({ _id: { $in: sessionIds } })
+
+        if (!sessions || sessions.length === 0) {
+          return { ok: false, message: 'Sessions not found', sessions: [] }
+        }
+
+        // Remove player from each session
+        for (const session of sessions) {
+          session.players = session.players.filter(
+            p => p.playerId.toString() !== playerId.toString()
+          )
+          await session.save()
+
+          pubsub.publish(SESSION_SUB_TRIGGER, {
+            sessionSub: { type: 'UPDATED', session },
+          })
+        }
+
+        return { ok: true, message: 'Player removed from sessions', sessions }
+      } catch (error) {
+        return { ok: false, message: error.message, sessions: [] }
       }
     },
   },

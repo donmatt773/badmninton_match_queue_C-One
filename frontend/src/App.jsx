@@ -11,6 +11,7 @@ import PlayersPage from './pages/PlayersPage'
 import OngoingMatchesPage from './pages/OngoingMatchesPage'
 import RecordsPage from './pages/RecordsPage'
 import WaitingRoomPage from './pages/WaitingRoomPage'
+import PaymentsPage from './pages/PaymentsPage'
 
 const SESSIONS_QUERY = gql`
   query Sessions {
@@ -24,6 +25,7 @@ const SESSIONS_QUERY = gql`
         playerId
         gamesPlayed
       }
+      price
       startedAt
       endedAt
       createdAt
@@ -46,6 +48,7 @@ const SESSION_SUBSCRIPTION = gql`
           playerId
           gamesPlayed
         }
+        price
         startedAt
         endedAt
         createdAt
@@ -70,6 +73,7 @@ const CREATE_SESSION_MUTATION = gql`
           playerId
           gamesPlayed
         }
+        price
         startedAt
         endedAt
         createdAt
@@ -94,6 +98,7 @@ const UPDATE_SESSION_MUTATION = gql`
           playerId
           gamesPlayed
         }
+        price
         startedAt
         endedAt
         createdAt
@@ -142,6 +147,31 @@ const END_SESSION_MUTATION = gql`
           playerId
           gamesPlayed
         }
+        startedAt
+        endedAt
+        createdAt
+        updatedAt
+      }
+    }
+  }
+`
+
+const REMOVE_PLAYER_FROM_SESSIONS_MUTATION = gql`
+  mutation RemovePlayerFromSessions($playerId: ID!, $sessionIds: [ID!]!) {
+    removePlayerFromSessions(playerId: $playerId, sessionIds: $sessionIds) {
+      ok
+      message
+      sessions {
+        _id
+        name
+        status
+        isArchived
+        courts
+        players {
+          playerId
+          gamesPlayed
+        }
+        price
         startedAt
         endedAt
         createdAt
@@ -278,6 +308,24 @@ const COURT_SUBSCRIPTION = gql`
   }
 `
 
+const ONGOING_MATCHES_SUBSCRIPTION = gql`
+  subscription OngoingMatchUpdates {
+    ongoingMatchUpdates {
+      type
+      match {
+        _id
+        sessionId
+        courtId
+        playerIds
+        queued
+        startedAt
+        createdAt
+        updatedAt
+      }
+    }
+  }
+`
+
 const PLAYERS_QUERY = gql`
   query Players {
     players {
@@ -289,6 +337,19 @@ const PLAYERS_QUERY = gql`
       winCount
       lossCount
       winRate
+    }
+  }
+`
+
+const GAMES_BY_SESSION_IDS_QUERY = gql`
+  query GamesBySessionIds($sessionIds: [ID!]!) {
+    gamesBySessionIds(sessionIds: $sessionIds) {
+      _id
+      sessionId
+      players
+      finishedAt
+      createdAt
+      updatedAt
     }
   }
 `
@@ -316,11 +377,23 @@ const App = () => {
   const { data: subData } = useSubscription(SESSION_SUBSCRIPTION)
   const { data: ongoingMatchesData, refetch: refetchOngoingMatches } = useQuery(ONGOING_MATCHES_QUERY)
   const { data: courtsData } = useQuery(COURTS_QUERY)
-  const { data: courtSubData } = useSubscription(COURT_SUBSCRIPTION)
+  useSubscription(COURT_SUBSCRIPTION)
+  const { data: ongoingMatchSubData } = useSubscription(ONGOING_MATCHES_SUBSCRIPTION)
   const { data: playersData, refetch: refetchPlayers } = useQuery(PLAYERS_QUERY)
+  const sessionIdsForGames = useMemo(
+    () => (data?.sessions || []).map((session) => session._id),
+    [data?.sessions]
+  )
+  const { data: gamesBySessionData } = useQuery(GAMES_BY_SESSION_IDS_QUERY, {
+    variables: { sessionIds: sessionIdsForGames },
+    skip: sessionIdsForGames.length === 0,
+  })
   const [createSession, { loading: createLoading }] = useMutation(CREATE_SESSION_MUTATION)
   const [updateSession, { loading: updateLoading }] = useMutation(UPDATE_SESSION_MUTATION)
-  const [startSession, { loading: startLoading }] = useMutation(START_SESSION_MUTATION)
+  const [removePlayerFromSessions] = useMutation(REMOVE_PLAYER_FROM_SESSIONS_MUTATION, {
+    refetchQueries: [{ query: SESSIONS_QUERY }]
+  })
+  const [startSession] = useMutation(START_SESSION_MUTATION)
   const [endSession, { loading: endSessionLoading }] = useMutation(END_SESSION_MUTATION, {
     refetchQueries: [{ query: SESSIONS_QUERY }]
   })
@@ -337,13 +410,6 @@ const App = () => {
     const timeout = setTimeout(() => setCongratsToast(null), 4000)
     return () => clearTimeout(timeout)
   }, [congratsToast])
-
-  // Update data when subscription data arrives
-  useEffect(() => {
-    if (subData?.sessionSub?.session) {
-      console.log('📡 Real-time update:', subData.sessionSub.type)
-    }
-  }, [subData])
 
   // Load ongoing matches from backend on mount and organize by session
   useEffect(() => {
@@ -374,6 +440,73 @@ const App = () => {
     }
   }, [ongoingMatchesData])
 
+  // Handle real-time match updates from subscription
+  useEffect(() => {
+    if (!ongoingMatchSubData?.ongoingMatchUpdates) return
+    
+    const { type, match } = ongoingMatchSubData.ongoingMatchUpdates
+    
+    if (type === 'STARTED' || type === 'UPDATED' || type === 'CREATED') {
+      setOngoingMatches(prev => {
+        const updated = { ...prev }
+        if (!updated[match.sessionId]) {
+          updated[match.sessionId] = []
+        }
+        
+        if (match.queued) {
+          // Remove from ongoing if it exists
+          updated[match.sessionId] = updated[match.sessionId].filter(m => m._id !== match._id)
+          // Keep queued data isolated in matchQueue state
+          setMatchQueue(q => {
+            const q_updated = { ...q }
+            if (!q_updated[match.sessionId]) q_updated[match.sessionId] = []
+            const index = q_updated[match.sessionId].findIndex(m => m._id === match._id)
+            if (index >= 0) {
+              q_updated[match.sessionId][index] = { _id: match._id, ...match }
+            } else {
+              q_updated[match.sessionId].push({ _id: match._id, ...match })
+            }
+            return q_updated
+          })
+        } else {
+          // Remove from queued if it exists
+          setMatchQueue(q => {
+            const q_updated = { ...q }
+            if (q_updated[match.sessionId]) {
+              q_updated[match.sessionId] = q_updated[match.sessionId].filter(m => m._id !== match._id)
+            }
+            return q_updated
+          })
+          // Add to ongoing
+          const index = updated[match.sessionId].findIndex(m => m._id === match._id)
+          if (index >= 0) {
+            updated[match.sessionId][index] = { _id: match._id, ...match }
+          } else {
+            updated[match.sessionId].push({ _id: match._id, ...match })
+          }
+        }
+        
+        return updated
+      })
+    } else if (type === 'DELETED' || type === 'ENDED') {
+      setOngoingMatches(prev => {
+        const updated = { ...prev }
+        if (updated[match.sessionId]) {
+          updated[match.sessionId] = updated[match.sessionId].filter(m => m._id !== match._id)
+        }
+        return updated
+      })
+      
+      setMatchQueue(prev => {
+        const updated = { ...prev }
+        if (updated[match.sessionId]) {
+          updated[match.sessionId] = updated[match.sessionId].filter(m => m._id !== match._id)
+        }
+        return updated
+      })
+    }
+  }, [ongoingMatchSubData])
+
   // Auto-transfer queued matches to ongoing table when no conflicts (but don't start them)
   useEffect(() => {
     const allOngoingMatches = Object.values(ongoingMatches).flat()
@@ -395,10 +528,16 @@ const App = () => {
       startingQueuedIds.current.add(firstQueued._id)
       
       // Transfer to ongoing table (client-side only, match stays queued=true for manual start)
-      setOngoingMatches((prev) => ({
-        ...prev,
-        [sessionId]: [...(prev[sessionId] || []), firstQueued],
-      }))
+      setOngoingMatches((prev) => {
+        const sessionMatches = prev[sessionId] || []
+        if (sessionMatches.some((m) => m._id === firstQueued._id)) {
+          return prev
+        }
+        return {
+          ...prev,
+          [sessionId]: [...sessionMatches, firstQueued],
+        }
+      })
       setMatchQueue((prev) => ({
         ...prev,
         [sessionId]: (prev[sessionId] || []).filter((m) => m._id !== firstQueued._id),
@@ -432,14 +571,21 @@ const App = () => {
     try {
       if (editSession) {
         // Update existing session
+        const input = {
+          name: formData.name,
+          courtIds: formData.courts,
+          playerIds: formData.players,
+        }
+        
+        // Only add price if it has a value
+        if (formData.price !== '' && formData.price !== null && formData.price !== undefined) {
+          input.price = parseFloat(formData.price)
+        }
+        
         const result = await updateSession({
           variables: {
             id: editSession._id,
-            input: {
-              name: formData.name,
-              courtIds: formData.courts,
-              playerIds: formData.players,
-            }
+            input
           }
         })
         
@@ -451,17 +597,27 @@ const App = () => {
         }
       } else {
         // Create new session
+        const input = {
+          name: formData.name,
+          courtIds: formData.courts,
+          playerIds: formData.players,
+        }
+        
+        // Only add price if it has a value
+        if (formData.price !== '' && formData.price !== null && formData.price !== undefined) {
+          input.price = parseFloat(formData.price)
+        }
+        
         const result = await createSession({
           variables: {
-            input: {
-              name: formData.name,
-              courtIds: formData.courts,
-              playerIds: formData.players,
-            }
+            input
           }
         })
         
         if (result.data.createSession.ok) {
+          // Automatically start the newly created session
+          const newSessionId = result.data.createSession.session._id
+          await handleStartSession(newSessionId)
           setIsFormOpen(false)
         } else {
           alert(result.data.createSession.message)
@@ -666,6 +822,8 @@ const App = () => {
         return
       }
 
+      // Keep session.players.gamesPlayed in sync for Payments match counts
+      await refetch()
       await refetchOngoingMatches()
       setCongratsToast({
         winners: winnerIds.map(getPlayerName),
@@ -703,6 +861,30 @@ const App = () => {
       }
     } catch (err) {
       alert(err.message)
+    }
+  }
+
+  const handleFinishPlayer = async (playerId, options = {}) => {
+    try {
+      const { isExempted, sessionsToRemoveFrom } = options
+      
+      // Remove player from sessions
+      if (sessionsToRemoveFrom && sessionsToRemoveFrom.length > 0) {
+        const result = await removePlayerFromSessions({
+          variables: {
+            playerId,
+            sessionIds: sessionsToRemoveFrom
+          }
+        })
+        
+        if (result.data.removePlayerFromSessions.ok) {
+          console.log(`Player ${playerId} removed from ${sessionsToRemoveFrom.length} session(s)`, isExempted ? '(Exempted)' : '(Payment required)')
+        } else {
+          alert(result.data.removePlayerFromSessions.message)
+        }
+      }
+    } catch (err) {
+      alert(`Error finishing player: ${err.message}`)
     }
   }
 
@@ -775,6 +957,7 @@ const App = () => {
             players={playersData?.players || []}
             onPlayersUpdated={() => refetchPlayers()}
             ongoingMatches={ongoingMatches}
+          matchQueue={matchQueue}
           />
         )}
         {currentPage === 'ongoing' && (
@@ -810,6 +993,18 @@ const App = () => {
             onCancelMatch={handleCancelMatch}
             filteredSessionId={filteredSessionId}
             onClearFilter={() => setFilteredSessionId(null)}
+            onFilterSessionChange={(sessionId) => setFilteredSessionId(sessionId)}
+          />
+        )}
+        {currentPage === 'payments' && (
+          <PaymentsPage
+            sessions={sessions}
+            players={playersData?.players || []}
+            ongoingMatches={ongoingMatches}
+            matchQueue={matchQueue}
+            games={gamesBySessionData?.gamesBySessionIds || []}
+            onFinishPlayer={handleFinishPlayer}
+            filteredSessionId={filteredSessionId}
             onFilterSessionChange={(sessionId) => setFilteredSessionId(sessionId)}
           />
         )}

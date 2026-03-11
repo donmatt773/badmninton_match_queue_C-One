@@ -7,11 +7,6 @@ const STATUS_LABELS = {
   TRANSFERRING: 'Ongoing Matches',
 }
 
-const dotClassName = {
-  OPEN: 'bg-emerald-400 shadow-[0_0_0_6px_rgba(52,211,153,0.2)]',
-  TRANSFERRING: 'bg-sky-400 shadow-[0_0_0_6px_rgba(56,189,248,0.2)]',
-}
-
 const SessionStats = ({ sessions, ongoingMatches, matchQueue, players, courts }) => {
   const counts = useMemo(() => {
     return sessions.reduce(

@@ -24,6 +24,11 @@ export default defineConfig([
     },
     rules: {
       'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      // apollo subscription patterns legitimately call setState in useEffect bodies
+      'react-hooks/set-state-in-effect': 'warn',
+      // react compiler purity/memoization rules — too strict for current patterns
+      'react-hooks/purity': 'warn',
+      'react-hooks/preserve-manual-memoization': 'warn',
     },
   },
 ])

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { gql } from '@apollo/client'
 import { useQuery, useSubscription } from '@apollo/client/react'
 import BadmintonCourt from '../components/BadmintonCourt'
@@ -100,6 +100,8 @@ const WaitingRoomPage = () => {
   const [activePage, setActivePage] = useState(0)
   const [queuePage, setQueuePage] = useState(0)
   const ITEMS_PER_PAGE = 5
+  const prevMatchesLengthRef = useRef(null)
+  const prevQueueLengthRef = useRef(null)
 
   // Subscribe to real-time match updates (ongoing matches)
   const { data: matchUpdateData, loading: subLoading, error: subError } = useSubscription(ONGOING_MATCH_UPDATES_SUBSCRIPTION)
@@ -108,11 +110,11 @@ const WaitingRoomPage = () => {
   const { data: playerUpdateData, loading: playerSubLoading, error: playerSubError } = useSubscription(PLAYER_UPDATES_SUBSCRIPTION)
 
   // Fetch initial data - subscriptions handle real-time updates
-  const { data: ongoingMatchesData, loading: matchesLoading, error: matchesError, refetch: refetchMatches } = useQuery(ONGOING_MATCHES_QUERY, {
+  const { data: ongoingMatchesData, error: matchesError, refetch: refetchMatches } = useQuery(ONGOING_MATCHES_QUERY, {
     pollInterval: (subLoading || subError || playerSubLoading || playerSubError) ? 5000 : 0  // Only poll if subscriptions are not connected
   })
-  const { data: courtsData, loading: courtsLoading } = useQuery(COURTS_QUERY)
-  const { data: playersData, loading: playersLoading, refetch: refetchPlayers } = useQuery(PLAYERS_QUERY)
+  const { data: courtsData } = useQuery(COURTS_QUERY)
+  const { data: playersData } = useQuery(PLAYERS_QUERY)
 
   const courts = courtsData?.courts || []
   const players = playersState.length > 0 ? playersState : (playersData?.players || [])
@@ -164,21 +166,31 @@ const WaitingRoomPage = () => {
       const { type, match } = matchUpdateData.ongoingMatchUpdates
       const matchWithId = { _id: match._id, ...match }
 
-      console.log('🔔 Real-time update received:', type, match._id, 'queued:', match.queued)
-
       if (type === 'STARTED') {
         if (match.queued) {
           // Add to queue
-          setMatchQueue(prev => ({
-            ...prev,
-            [match.sessionId]: [...(prev[match.sessionId] || []), matchWithId]
-          }))
+          setMatchQueue(prev => {
+            const current = prev[match.sessionId] || []
+            const exists = current.some(m => m._id === match._id)
+            return {
+              ...prev,
+              [match.sessionId]: exists
+                ? current.map(m => (m._id === match._id ? matchWithId : m))
+                : [...current, matchWithId]
+            }
+          })
         } else {
           // Add to ongoing matches
-          setOngoingMatches(prev => ({
-            ...prev,
-            [match.sessionId]: [...(prev[match.sessionId] || []), matchWithId]
-          }))
+          setOngoingMatches(prev => {
+            const current = prev[match.sessionId] || []
+            const exists = current.some(m => m._id === match._id)
+            return {
+              ...prev,
+              [match.sessionId]: exists
+                ? current.map(m => (m._id === match._id ? matchWithId : m))
+                : [...current, matchWithId]
+            }
+          })
         }
       } else if (type === 'UPDATED') {
         // Handle state transition: queued -> active or active -> active
@@ -236,8 +248,6 @@ const WaitingRoomPage = () => {
   useEffect(() => {
     if (playerUpdateData?.playerUpdates) {
       const { type, player } = playerUpdateData.playerUpdates
-      console.log('🔔 Player update received:', type, player._id, player.name)
-
       if (type === 'CREATED') {
         // Add new player
         setPlayersState(prev => [...prev, player])
@@ -251,7 +261,7 @@ const WaitingRoomPage = () => {
         setPlayersState(prev => prev.filter(p => p._id !== player._id))
       }
     }
-  }, [playerUpdateData, refetchPlayers])
+  }, [playerUpdateData])
 
   // Fallback: refetch if subscription isn't working or query failed
   useEffect(() => {
@@ -334,17 +344,25 @@ const WaitingRoomPage = () => {
   }, [allMatches.length])
 
   // Reset pagination when data changes
+  // Clamp activePage when allMatches length changes to prevent out-of-bounds index
   useEffect(() => {
-    if (activePage * ITEMS_PER_PAGE >= allMatches.length && allMatches.length > 0) {
-      setActivePage(Math.floor((allMatches.length - 1) / ITEMS_PER_PAGE))
+    if (prevMatchesLengthRef.current !== null && allMatches.length !== prevMatchesLengthRef.current) {
+      if (activePage * ITEMS_PER_PAGE >= allMatches.length && allMatches.length > 0) {
+        setActivePage(Math.floor((allMatches.length - 1) / ITEMS_PER_PAGE))
+      }
     }
-  }, [allMatches.length])
+    prevMatchesLengthRef.current = allMatches.length
+  }, [allMatches.length, activePage])
 
+  // Clamp queuePage when queuedMatches length changes to prevent out-of-bounds index
   useEffect(() => {
-    if (queuePage * ITEMS_PER_PAGE >= queuedMatches.length && queuedMatches.length > 0) {
-      setQueuePage(Math.floor((queuedMatches.length - 1) / ITEMS_PER_PAGE))
+    if (prevQueueLengthRef.current !== null && queuedMatches.length !== prevQueueLengthRef.current) {
+      if (queuePage * ITEMS_PER_PAGE >= queuedMatches.length && queuedMatches.length > 0) {
+        setQueuePage(Math.floor((queuedMatches.length - 1) / ITEMS_PER_PAGE))
+      }
     }
-  }, [queuedMatches.length])
+    prevQueueLengthRef.current = queuedMatches.length
+  }, [queuedMatches.length, queuePage])
 
   return (
     <div className="min-h-screen bg-linear-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100 overflow-x-hidden flex flex-col">

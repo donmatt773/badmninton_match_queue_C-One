@@ -6,6 +6,7 @@ import { Types } from 'mongoose';
 
 const toObjectId = (value) => new Types.ObjectId(value.toString());
 const SUB_TRIGGER = 'GAME_UPDATED';
+const SESSION_SUB_TRIGGER = 'SESSION_UPDATED';
 
 const gameResolver = {
   Query: {
@@ -103,6 +104,9 @@ const gameResolver = {
           }
         );
 
+        // Fetch updated session and publish event
+        const updatedSession = await Session.findById(sessionObjectId);
+
         await Player.updateMany(
           { _id: { $in: playerObjectIds } },
           { $inc: { playCount: 1 } }
@@ -118,8 +122,14 @@ const gameResolver = {
           { $inc: { lossCount: 1 } }
         );
 
+        // Publish GAME event
         pubsub.publish(SUB_TRIGGER, {
           gameSub: { type: 'CREATED', game: gameDoc },
+        });
+
+        // Publish SESSION event to notify subscribers of updated gamesPlayed
+        pubsub.publish(SESSION_SUB_TRIGGER, {
+          sessionSub: { type: 'UPDATED', session: updatedSession },
         });
 
         return { ok: true, message: 'Game recorded successfully', game: gameDoc };

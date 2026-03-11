@@ -71,11 +71,13 @@ const SessionForm = ({
   const [notFoundNames, setNotFoundNames] = useState([])
   const [isNotFoundModalOpen, setIsNotFoundModalOpen] = useState(false)
   const [playersState, setPlayersState] = useState([])
+  const [showZeroPriceConfirmation, setShowZeroPriceConfirmation] = useState(false)
   const PLAYERS_PER_PAGE = 50 // 10x5 grid
   const [formData, setFormData] = useState({
     name: '',
     courts: [],
     players: [],
+    price: '',
   })
 
   const { data: courtsData, loading: courtsLoading } = useQuery(COURTS_QUERY)
@@ -95,16 +97,13 @@ const SessionForm = ({
   }, [playersError])
 
   useEffect(() => {
-    console.log('Players query status:', { playersLoading, playersData, playersError })
-  }, [playersLoading, playersData, playersError])
-
-  useEffect(() => {
     if (session) {
       // Edit mode
       setFormData({
         name: session.name,
         courts: session.courts || [],
         players: session.players?.map(p => p.playerId) || [],
+        price: session.price !== null && session.price !== undefined ? session.price.toString() : '',
       })
     } else {
       // Create mode
@@ -112,6 +111,7 @@ const SessionForm = ({
         name: '',
         courts: [],
         players: [],
+        price: '',
       })
     }
     setCurrentStep(1)
@@ -124,9 +124,7 @@ const SessionForm = ({
   }, [session, isOpen])
 
   useEffect(() => {
-    console.log('PlayersData received:', playersData)
     if (playersData?.players) {
-      console.log('Setting players state:', playersData.players)
       setPlayersState(playersData.players)
     }
   }, [playersData?.players])
@@ -168,12 +166,14 @@ const SessionForm = ({
   const isStep1Valid = () => formData.name.trim() !== ''
   const isStep2Valid = () => formData.courts.length > 0
   const isStep3Valid = () => formData.players.length > 0
+  const isStep4Valid = () => true // Price is optional
 
   const isStepValid = (step) => {
     switch (step) {
       case 1: return isStep1Valid()
       case 2: return isStep2Valid()
       case 3: return isStep3Valid()
+      case 4: return isStep4Valid()
       default: return false
     }
   }
@@ -278,7 +278,7 @@ const SessionForm = ({
 
         {/* Step Indicator */}
         <div className="mb-4 flex items-center gap-2">
-          {[1, 2, 3].map((step) => {
+          {[1, 2, 3, 4].map((step) => {
             const stepValid = isStepValid(step)
             const isCompleted = step < currentStep
             const isCurrent = step === currentStep
@@ -306,7 +306,7 @@ const SessionForm = ({
                 >
                   {showError ? '✕' : isCompleted && stepValid ? '✓' : step}
                 </button>
-                {step < 3 && <div className={`flex-1 h-0.5 ${lineColor}`} />}
+                {step < 4 && <div className={`flex-1 h-0.5 ${lineColor}`} />}
               </React.Fragment>
             )
           })}
@@ -422,7 +422,16 @@ const SessionForm = ({
                 <label className="mb-2 block text-xs font-semibold text-white">
                   Players {playersLoading && <span className="text-xs text-slate-400">(loading...)</span>}
                 </label>
-                <div className="mb-2 flex justify-end">
+                <div className="mb-2 flex justify-end items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setFormData(prev => ({ ...prev, players: [] }))}
+                    disabled={formData.players.length === 0}
+                    className="rounded-lg bg-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-200 transition hover:bg-rose-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={formData.players.length === 0 ? 'No players selected' : 'Remove all selected players'}
+                  >
+                    Unselect All
+                  </button>
                   <button
                     type="button"
                     onClick={async () => {
@@ -579,6 +588,31 @@ const SessionForm = ({
             </div>
           )}
 
+          {/* Step 4: Price Per Head Per Game */}
+          {currentStep === 4 && (
+            <div className="space-y-3">
+              <div>
+                <h3 className="mb-1.5 text-base font-semibold text-white">Price Per Head Per Game</h3>
+                <p className="mb-3 text-xs text-slate-400">Set the price for this session (optional)</p>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold text-white">
+                  Price Per Game (₱)
+                </label>
+                <input
+                  type="number"
+                  value={formData.price}
+                  onChange={(e) => setFormData(prev => ({ ...prev, price: e.target.value }))}
+                  placeholder="Enter price per game"
+                  min="0"
+                  step="0.01"
+                  className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:border-white/30 focus:outline-none"
+                />
+              </div>
+              <p className="text-xs text-slate-400">Leave empty or 0 for free session</p>
+            </div>
+          )}
+
           {/* Form Actions */}
           <div className="flex gap-2 pt-4 border-t border-white/10">
             <button
@@ -597,7 +631,7 @@ const SessionForm = ({
                 Back
               </button>
             )}
-            {currentStep < 3 && (
+            {currentStep < 4 && (
               <button
                 type="button"
                 onClick={() => {
@@ -616,9 +650,17 @@ const SessionForm = ({
                 Next
               </button>
             )}
-            {currentStep === 3 && (
+            {currentStep === 4 && (
               <button
-                type="submit"
+                type="button"
+                onClick={() => {
+                  const price = Number(formData.price) || 0
+                  if (price === 0) {
+                    setShowZeroPriceConfirmation(true)
+                  } else {
+                    onSubmit(formData)
+                  }
+                }}
                 disabled={isLoading}
                 className="flex-1 rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/30 disabled:opacity-50"
               >
@@ -635,6 +677,45 @@ const SessionForm = ({
           matchExistingOnly
           existingPlayers={players}
         />
+
+        {/* Zero Price Confirmation Modal */}
+        {showZeroPriceConfirmation && (
+          <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/60 p-4">
+            <div className="relative w-full max-w-md rounded-2xl border border-amber-500/30 bg-slate-900 p-5 shadow-2xl">
+              <button
+                onClick={() => setShowZeroPriceConfirmation(false)}
+                className="absolute right-3 top-3 text-slate-400 hover:text-white transition"
+                type="button"
+              >
+                ✕
+              </button>
+              <h3 className="mb-2 text-base font-semibold text-amber-300">Proceed Without Price?</h3>
+              <p className="mb-4 text-sm text-slate-300">
+                No price has been set for this session. Players will not be charged for games. Do you want to proceed?
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowZeroPriceConfirmation(false)}
+                  className="flex-1 rounded-lg border border-white/20 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:bg-white/5"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowZeroPriceConfirmation(false)
+                    onSubmit(formData)
+                  }}
+                  disabled={isLoading}
+                  className="flex-1 rounded-lg bg-amber-500/20 px-3 py-1.5 text-xs font-semibold text-amber-200 transition hover:bg-amber-500/30 disabled:opacity-50"
+                >
+                  {isLoading ? 'Saving...' : 'Yes, Continue'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {isNotFoundModalOpen && (
           <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/60 p-4">

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { gql } from '@apollo/client'
 import { useMutation, useSubscription, useQuery } from '@apollo/client/react'
 import MassAddPlayersModal from '../components/MassAddPlayersModal'
@@ -110,7 +110,6 @@ const PLAYER_LEVELS = {
 // Memoized player row component to prevent unnecessary re-renders
 const PlayerRow = React.memo(({
   player,
-  isBulkDeleteMode,
   selectedPlayerIds,
   expandedPlayerId,
   isPlayerInOngoingMatch,
@@ -122,22 +121,20 @@ const PlayerRow = React.memo(({
   return (
     <React.Fragment key={player._id}>
       <tr className="border-b border-white/10 transition hover:bg-white/5">
-        {isBulkDeleteMode && (
-          <td className="px-2 sm:px-3.5 py-2 text-center">
-            <input
-              type="checkbox"
-              checked={selectedPlayerIds.has(player._id)}
-              onChange={() => onCheckboxChange(player._id)}
-              disabled={isPlayerInOngoingMatch(player._id)}
-              title={isPlayerInOngoingMatch(player._id) ? 'Cannot delete player currently in a match' : ''}
-              className={`w-4 h-4 rounded border-2 transition cursor-pointer ${
-                isPlayerInOngoingMatch(player._id)
-                  ? 'border-slate-600 bg-slate-700 cursor-not-allowed opacity-50'
-                  : 'border-rose-500/50 bg-slate-800 checked:bg-rose-500 checked:border-rose-500 focus:ring-2 focus:ring-rose-500/50'
-              }`}
-            />
-          </td>
-        )}
+        <td className="px-2 sm:px-3.5 py-2 text-center">
+          <input
+            type="checkbox"
+            checked={selectedPlayerIds.has(player._id)}
+            onChange={() => onCheckboxChange(player._id)}
+            disabled={isPlayerInOngoingMatch(player._id)}
+            title={isPlayerInOngoingMatch(player._id) ? 'Player is in a match or queue' : ''}
+            className={`w-4 h-4 rounded border-2 transition cursor-pointer ${
+              isPlayerInOngoingMatch(player._id)
+                ? 'border-slate-600 bg-slate-700 cursor-not-allowed opacity-50'
+                : 'border-rose-500/50 bg-slate-800 checked:bg-rose-500 checked:border-rose-500 focus:ring-2 focus:ring-rose-500/50'
+            }`}
+          />
+        </td>
         <td 
           className="px-2 sm:px-3.5 py-2 text-xs sm:text-sm text-white cursor-pointer hover:text-blue-300 transition sm:cursor-default sm:hover:text-white font-medium"
           onClick={() => onNameClick(player._id)}
@@ -206,7 +203,7 @@ const PlayerRow = React.memo(({
       {/* Mobile expandable details row */}
       {expandedPlayerId === player._id && (
         <tr className="bg-slate-800/30 border-b border-white/10 sm:hidden">
-          <td colSpan={isBulkDeleteMode ? 2 : 1} className="px-2 py-3">
+          <td colSpan={2} className="px-2 py-3">
             <div className="space-y-2 text-xs">
               <div className="flex justify-between items-center border-b border-white/10 pb-2">
                 <span className="text-slate-400">Gender:</span>
@@ -244,7 +241,7 @@ const PlayerRow = React.memo(({
       {/* Tablet expandable details row (for hidden stats on md breakpoint) */}
       {expandedPlayerId === player._id && (
         <tr className="bg-slate-800/30 border-b border-white/10 hidden sm:table-row md:hidden">
-          <td colSpan={isBulkDeleteMode ? 4 : 3} className="px-2 py-3">
+          <td colSpan={4} className="px-2 py-3">
             <div className="space-y-2 text-xs">
               <div className="flex justify-between items-center border-b border-white/10 pb-2">
                 <span className="text-slate-400">Games:</span>
@@ -272,7 +269,7 @@ const PlayerRow = React.memo(({
 
 PlayerRow.displayName = 'PlayerRow'
 
-const PlayersPage = ({ players = [], onPlayersUpdated, ongoingMatches = {} }) => {
+const PlayersPage = ({ onPlayersUpdated, ongoingMatches = {}, matchQueue = {} }) => {
   const [formData, setFormData] = useState({
     name: '',
     gender: '',
@@ -303,7 +300,6 @@ const PlayersPage = ({ players = [], onPlayersUpdated, ongoingMatches = {} }) =>
   })
   const [currentPage, setCurrentPage] = useState(1)
   const [playersState, setPlayersState] = useState([])
-  const [isBulkDeleteMode, setIsBulkDeleteMode] = useState(false)
   const [selectedPlayerIds, setSelectedPlayerIds] = useState(new Set())
   const [isBulkDeleteConfirmModalOpen, setIsBulkDeleteConfirmModalOpen] = useState(false)
   const [bulkDeletePlayerNames, setBulkDeletePlayerNames] = useState('')
@@ -394,15 +390,10 @@ const PlayersPage = ({ players = [], onPlayersUpdated, ongoingMatches = {} }) =>
     }
   }, [playerUpdateData])
 
-  // Update header checkbox indeterminate state
-  useEffect(() => {
-    if (headerCheckboxRef.current && isBulkDeleteMode) {
-      const checkboxState = getHeaderCheckboxState()
-      headerCheckboxRef.current.indeterminate = checkboxState.indeterminate
-    }
-  }, [selectedPlayerIds, isBulkDeleteMode, currentPage, searchTerm, sortBy])
-
   const displayedPlayers = playersState
+  const filteredPlayers = displayedPlayers
+  const totalPages = Math.ceil(totalPlayersCount / playersPerPage)
+  const paginatedPlayers = displayedPlayers
 
   const [createPlayer] = useMutation(CREATE_PLAYER_MUTATION, {
     onCompleted: (data) => {
@@ -536,13 +527,19 @@ const PlayersPage = ({ players = [], onPlayersUpdated, ongoingMatches = {} }) =>
     setPlayerNameToDelete('')
   }
 
-  const isPlayerInOngoingMatch = (playerId) => {
+  const isPlayerInOngoingMatch = useCallback((playerId) => {
     const allMatches = Object.values(ongoingMatches).flat()
-    return allMatches.some((match) => {
+    const inMatch = allMatches.some((match) => {
       const playerIds = match.playerIds || []
       return playerIds.includes(playerId)
     })
-  }
+    if (inMatch) return true
+    const allQueued = Object.values(matchQueue).flat()
+    return allQueued.some((match) => {
+      const playerIds = match.playerIds || []
+      return playerIds.includes(playerId)
+    })
+  }, [ongoingMatches, matchQueue])
 
   const handleEditClick = (player) => {
     setEditingPlayer(player)
@@ -555,7 +552,7 @@ const PlayersPage = ({ players = [], onPlayersUpdated, ongoingMatches = {} }) =>
   }
 
   const handleBulkDeleteToggle = () => {
-    if (isBulkDeleteMode && selectedPlayerIds.size > 0) {
+    if (selectedPlayerIds.size > 0) {
       // Show confirmation modal
       const playersToDelete = Array.from(selectedPlayerIds)
       const playerNames = playersToDelete
@@ -566,10 +563,6 @@ const PlayersPage = ({ players = [], onPlayersUpdated, ongoingMatches = {} }) =>
       setBulkDeletePlayerNames(playerNames)
       setBulkDeleteCount(playersToDelete.length)
       setIsBulkDeleteConfirmModalOpen(true)
-    } else {
-      // Toggle bulk delete mode
-      setIsBulkDeleteMode(!isBulkDeleteMode)
-      setSelectedPlayerIds(new Set())
     }
   }
 
@@ -584,8 +577,7 @@ const PlayersPage = ({ players = [], onPlayersUpdated, ongoingMatches = {} }) =>
           variables: { id: playerId },
         })
       }
-      // Reset bulk delete mode and selection
-      setIsBulkDeleteMode(false)
+      // Reset selection
       setSelectedPlayerIds(new Set())
     } catch (error) {
       console.error('Error deleting players:', error)
@@ -637,7 +629,7 @@ const PlayersPage = ({ players = [], onPlayersUpdated, ongoingMatches = {} }) =>
     }
   }
 
-  const getHeaderCheckboxState = () => {
+  const getHeaderCheckboxState = useCallback(() => {
     const selectablePlayers = paginatedPlayers.filter(player => !isPlayerInOngoingMatch(player._id))
     if (selectablePlayers.length === 0) return { checked: false, indeterminate: false }
     
@@ -650,7 +642,15 @@ const PlayersPage = ({ players = [], onPlayersUpdated, ongoingMatches = {} }) =>
     } else {
       return { checked: false, indeterminate: true }
     }
-  }
+  }, [paginatedPlayers, isPlayerInOngoingMatch, selectedPlayerIds])
+
+  // Update header checkbox indeterminate state
+  useEffect(() => {
+    if (headerCheckboxRef.current) {
+      const checkboxState = getHeaderCheckboxState()
+      headerCheckboxRef.current.indeterminate = checkboxState.indeterminate
+    }
+  }, [selectedPlayerIds, currentPage, searchTerm, sortBy, getHeaderCheckboxState])
 
   const handleEditInputChange = (e) => {
     const { name, value } = e.target
@@ -691,18 +691,10 @@ const PlayersPage = ({ players = [], onPlayersUpdated, ongoingMatches = {} }) =>
     }
   }
 
-  // Pagination logic
-  // Backend is now handling filtering and sorting, so just use displayedPlayers directly
-  const filteredPlayers = displayedPlayers
-  const totalPages = Math.ceil(totalPlayersCount / playersPerPage)
-  const startIndex = 0 // Always 0 since we're getting paginated data from server
-  const paginatedPlayers = displayedPlayers
-
   // Reset to page 1 when search or sort changes
   useEffect(() => {
     setCurrentPage(1)
-    // Also reset bulk delete mode and selection when filters change
-    setIsBulkDeleteMode(false)
+    // Also reset selection when filters change
     setSelectedPlayerIds(new Set())
   }, [debouncedSearchTerm, sortBy, sortColumn, sortDirection])
 
@@ -710,7 +702,25 @@ const PlayersPage = ({ players = [], onPlayersUpdated, ongoingMatches = {} }) =>
     <div className="space-y-6 py-5">
       <div className="mb-3 flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-base font-semibold text-white sm:text-lg">Players List</h3>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          {selectedPlayerIds.size > 0 && (
+            <>
+              <button
+                onClick={() => setSelectedPlayerIds(new Set())}
+                className="inline-flex items-center justify-center rounded-lg bg-slate-500/20 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:bg-slate-500/30"
+                title="Uncheck all players"
+              >
+                ☐ Uncheck All
+              </button>
+              <button
+                onClick={handleBulkDeleteToggle}
+                className="inline-flex items-center justify-center rounded-lg bg-rose-500/20 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-rose-200 transition hover:bg-rose-500/30"
+                title={`Delete ${selectedPlayerIds.size} selected player(s)`}
+              >
+                🗑 Delete ({selectedPlayerIds.size})
+              </button>
+            </>
+          )}
           <button
             onClick={() => setIsMassAddModalOpen(true)}
             className="inline-flex items-center justify-center rounded-lg bg-blue-500/20 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-blue-200 transition hover:bg-blue-500/30"
@@ -754,45 +764,25 @@ const PlayersPage = ({ players = [], onPlayersUpdated, ongoingMatches = {} }) =>
         <table className="w-full text-sm sm:text-base">
           <thead>
             <tr className="border-b border-white/10 bg-slate-900/80">
-              {isBulkDeleteMode && (
-                <th className="px-2 sm:px-3.5 py-2 text-center text-xs font-semibold text-slate-200 w-12">
-                  <input
-                    ref={headerCheckboxRef}
-                    type="checkbox"
-                    checked={getHeaderCheckboxState().checked}
-                    onChange={handleSelectAllToggle}
-                    className="w-4 h-4 rounded border-2 border-rose-500/50 bg-slate-800 checked:bg-rose-500 checked:border-rose-500 focus:ring-2 focus:ring-rose-500/50 cursor-pointer transition"
-                    title="Select/Deselect all players on this page"
-                  />
-                </th>
-              )}
+              <th className="px-2 sm:px-3.5 py-2 text-center text-xs font-semibold text-slate-200 w-12">
+                <input
+                  ref={headerCheckboxRef}
+                  type="checkbox"
+                  checked={getHeaderCheckboxState().checked}
+                  onChange={handleSelectAllToggle}
+                  className="w-4 h-4 rounded border-2 border-rose-500/50 bg-slate-800 checked:bg-rose-500 checked:border-rose-500 focus:ring-2 focus:ring-rose-500/50 cursor-pointer transition"
+                  title="Select/Deselect all players on this page"
+                />
+              </th>
               <th 
                 className="px-2 sm:px-3.5 py-2 text-left text-xs sm:text-sm font-semibold text-slate-200 cursor-pointer hover:bg-slate-800/50 transition-colors select-none"
                 onClick={() => handleSort('name')}
               >
-                <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-1">
-                    Name
-                    {sortColumn === 'name' && (
-                      <span className="text-blue-400">{sortDirection === 'asc' ? '↑' : '↓'}</span>
-                    )}
-                  </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleBulkDeleteToggle()
-                    }}
-                    className={`inline-flex items-center justify-center rounded px-2 py-0.5 text-xs font-semibold transition ${
-                      isBulkDeleteMode && selectedPlayerIds.size > 0
-                        ? 'bg-rose-500/30 text-rose-200 hover:bg-rose-500/40'
-                        : isBulkDeleteMode
-                        ? 'bg-blue-500/20 text-blue-200 hover:bg-blue-500/30'
-                        : 'bg-slate-700/50 text-slate-300 hover:bg-slate-700'
-                    }`}
-                    title={isBulkDeleteMode && selectedPlayerIds.size > 0 ? `Delete ${selectedPlayerIds.size} selected player(s)` : isBulkDeleteMode ? 'Cancel bulk delete' : 'Enable bulk delete'}
-                  >
-                    {isBulkDeleteMode && selectedPlayerIds.size > 0 ? `🗑 Delete (${selectedPlayerIds.size})` : isBulkDeleteMode ? '✕ Cancel' : '☑ Select'}
-                  </button>
+                <div className="flex items-center gap-1">
+                  Name
+                  {sortColumn === 'name' && (
+                    <span className="text-blue-400">{sortDirection === 'asc' ? '↑' : '↓'}</span>
+                  )}
                 </div>
               </th>
               <th 
@@ -869,7 +859,7 @@ const PlayersPage = ({ players = [], onPlayersUpdated, ongoingMatches = {} }) =>
           <tbody>
             {playersLoading && (
               <tr>
-                <td colSpan={isBulkDeleteMode ? 10 : 9} className="px-3.5 py-8 text-center text-sm text-slate-400">
+                <td colSpan={10} className="px-3.5 py-8 text-center text-sm text-slate-400">
                   Loading players...
                 </td>
               </tr>
@@ -879,7 +869,6 @@ const PlayersPage = ({ players = [], onPlayersUpdated, ongoingMatches = {} }) =>
                 <PlayerRow
                   key={player._id}
                   player={player}
-                  isBulkDeleteMode={isBulkDeleteMode}
                   selectedPlayerIds={selectedPlayerIds}
                   expandedPlayerId={expandedPlayerId}
                   isPlayerInOngoingMatch={isPlayerInOngoingMatch}
@@ -892,7 +881,7 @@ const PlayersPage = ({ players = [], onPlayersUpdated, ongoingMatches = {} }) =>
             ) : (
               <tr>
                 <td
-                  colSpan={isBulkDeleteMode ? 9 : 8}
+                  colSpan={9}
                   className="px-3.5 py-4 text-center text-sm text-slate-400"
                 >
                   No players found. Add a player to get started.

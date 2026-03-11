@@ -32,6 +32,25 @@ const ongoingMatchResolver = {
       try {
         const { sessionId, courtId, playerIds, queued = false } = input;
 
+        // Validate court availability if not queued
+        if (!queued && courtId) {
+          const court = await Court.findById(courtId);
+          if (!court) {
+            return {
+              ok: false,
+              message: 'Court not found',
+              match: null,
+            };
+          }
+          if (court.status === 'OCCUPIED') {
+            return {
+              ok: false,
+              message: 'Court is already occupied by another match',
+              match: null,
+            };
+          }
+        }
+
         const newMatch = new OngoingMatch({
           sessionId,
           courtId,
@@ -134,6 +153,33 @@ const ongoingMatchResolver = {
 
         // Get old match to check if court is changing
         const oldMatch = await OngoingMatch.findById(id);
+
+        if (!oldMatch) {
+          return {
+            ok: false,
+            message: 'Match not found',
+            match: null,
+          };
+        }
+
+        // Validate new court availability if changing courts and match is not queued
+        if (input.courtId && !oldMatch.queued && oldMatch.courtId?.toString() !== input.courtId) {
+          const newCourt = await Court.findById(input.courtId);
+          if (!newCourt) {
+            return {
+              ok: false,
+              message: 'New court not found',
+              match: null,
+            };
+          }
+          if (newCourt.status === 'OCCUPIED') {
+            return {
+              ok: false,
+              message: 'New court is already occupied by another match',
+              match: null,
+            };
+          }
+        }
         
         const match = await OngoingMatch.findByIdAndUpdate(
           id,
@@ -201,14 +247,7 @@ const ongoingMatchResolver = {
 
     startQueuedMatch: async (_, { id }) => {
       try {
-        const match = await OngoingMatch.findByIdAndUpdate(
-          id,
-          { 
-            queued: false,
-            startedAt: new Date()
-          },
-          { returnDocument: 'after' }
-        );
+        const match = await OngoingMatch.findById(id);
 
         if (!match) {
           return {
@@ -217,6 +256,30 @@ const ongoingMatchResolver = {
             match: null,
           };
         }
+
+        // Validate court availability
+        if (match.courtId) {
+          const court = await Court.findById(match.courtId);
+          if (!court) {
+            return {
+              ok: false,
+              message: 'Court not found',
+              match: null,
+            };
+          }
+          if (court.status === 'OCCUPIED') {
+            return {
+              ok: false,
+              message: 'Court is already occupied by another match',
+              match: null,
+            };
+          }
+        }
+
+        // Update match to start
+        match.queued = false;
+        match.startedAt = new Date();
+        await match.save();
 
         // Update court status to OCCUPIED when queued match starts
         if (match.courtId) {

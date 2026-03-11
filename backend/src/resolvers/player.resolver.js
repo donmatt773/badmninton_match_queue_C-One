@@ -33,28 +33,75 @@ const playerResolver = {
     playersPaginated: async (_, { limit, offset, search, skillLevel, sortBy = 'createdAt', sortOrder = 'desc' }) => {
       const safeLimit = Math.min(Math.max(limit, 1), 1000)
       const safeOffset = Math.max(offset, 0)
-      
+
       // Build filter object
       const filter = {}
-      
+
       if (search) {
         filter.name = { $regex: search, $options: 'i' } // Case-insensitive search
       }
-      
+
       if (skillLevel) {
         filter.playerLevel = skillLevel
       }
-      
-      // Build sort object
+
+      const sortDirection = sortOrder === 'asc' ? 1 : -1
+
+      // Win rate is computed from wins/losses, so it must be sorted via aggregation.
+      if (sortBy === 'winRate') {
+        const players = await Player.aggregate([
+          { $match: filter },
+          {
+            $addFields: {
+              computedWinRate: {
+                $cond: [
+                  { $eq: [{ $add: ['$winCount', '$lossCount'] }, 0] },
+                  0,
+                  {
+                    $multiply: [
+                      {
+                        $divide: [
+                          '$winCount',
+                          { $add: ['$winCount', '$lossCount'] },
+                        ],
+                      },
+                      100,
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+          {
+            $sort: {
+              computedWinRate: sortDirection,
+              winCount: sortDirection,
+              playCount: sortDirection,
+              createdAt: -1,
+            },
+          },
+          { $skip: safeOffset },
+          { $limit: safeLimit },
+          { $project: { computedWinRate: 0 } },
+        ])
+
+        const total = await Player.countDocuments(filter)
+
+        return {
+          players,
+          total,
+        }
+      }
+
+      // Build sort object for direct model fields
       const sortObj = {}
       const validSortFields = ['name', 'createdAt', 'playCount', 'winCount', 'lossCount', 'playerLevel']
       const sortField = validSortFields.includes(sortBy) ? sortBy : 'createdAt'
-      const sortDirection = sortOrder === 'asc' ? 1 : -1
       sortObj[sortField] = sortDirection
-      
+
       const players = await Player.find(filter).sort(sortObj).limit(safeLimit).skip(safeOffset)
       const total = await Player.countDocuments(filter)
-      
+
       return {
         players,
         total,
